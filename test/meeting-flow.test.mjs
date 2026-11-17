@@ -45,3 +45,17 @@ test("a failed Add agent releases only the capture it requested", async () => {
   assert.equal(flow.transcript.snapshot().phase, "paused");
   flow.close();
 });
+
+test("a task finished after listening stops updates the meeting and keeps its thread link", async () => {
+  const flow = meetingFlow();
+  flow.join("RM_results"); await flow.addAgent();
+  await flow.task({ key: "brief", title: "Draft the brief", status: "working" });
+  flow.agents.stop("", flow.agent.pubkey);
+  flow.leave();
+  await flow.task({ key: "brief", title: "Draft the brief", status: "done", result: "Brief posted." });
+  const [task] = flow.agents.snapshot().tasks;
+  assert.equal(task.status, "done");
+  assert.equal(task.messageId, flow.published.at(-1).id);
+  assert.deepEqual(task.author, { pubkey: flow.agent.pubkey, name: "Studio" });
+  flow.close();
+});

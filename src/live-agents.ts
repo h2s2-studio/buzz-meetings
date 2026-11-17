@@ -13,7 +13,7 @@ export type AgentRuntime = {
   addInstructions(input: { id: string; text: string; when(agent: NativeAgent): boolean }): void;
   addTool(input: { name: string; description: string; inputSchema: Record<string, unknown>; call(client: Client, context: ToolContext, args: Record<string, unknown>): Promise<string> }): void;
 };
-type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string };
+type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string; author?: { pubkey: string; name: string } };
 type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; joinId: string; occurrenceId?: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
 export type CallAgent = { pubkey: string; name: string; channelId: string; sessionId: string; phase: "starting" | "listening" };
 export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; occurrenceId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
@@ -162,15 +162,16 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     const previous = run.tasks.find(task => task.key === key);
     if (previous?.delivery === "unconfirmed" || previous?.delivery === "publishing") throw new Error("This task publication is pending or unconfirmed. Check native chat before another update.");
     if (previous?.title === title.trim() && previous.status === status && previous.result === result) return JSON.stringify(previous);
-    const task: Task = { key, title: title.trim(), status, result, delivery: "publishing" };
+    const task: Task = { key, title: title.trim(), status, result, delivery: "publishing", author: { pubkey: run.agent.pubkey, name: run.agent.name } };
     if (previous) run.tasks.splice(run.tasks.indexOf(previous), 1, task); else { if (run.tasks.length >= 64) throw new Error("This meeting’s task limit was reached."); run.tasks.push(task); }
-    if (currentRun(run)) emit();
+    // Tasks belong to the call occurrence, so results keep updating after listening stops.
+    emit();
     try {
       client.signal?.throwIfAborted(); sessionFor(client, context, args, true);
       const posted = await client.publish({ kind: 9, created_at: Math.floor(Date.now()/1000), tags: [["h",run.channelId], ["e",run.root!,"","reply"]], content: `Meeting task · ${task.title}\nStatus: ${status}${result ? `\n\n${result}` : ""}` });
       task.delivery = "published"; task.messageId = posted.id; return JSON.stringify(task);
     } catch (problem) { task.delivery = "unconfirmed"; throw problem; }
-    finally { if (currentRun(run)) emit(); }
+    finally { emit(); }
   } });
   function eligible(pubkey: string) {
     const runtime = ctx.agents?.snapshot(), owner = ctx.relay.snapshot().viewer;

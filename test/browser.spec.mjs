@@ -591,6 +591,45 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   await controls(other).getByRole("button", { name: "Leave room", exact: true }).click();
 });
 
+test("completes a task after the agent stops listening and opens its result from the saved record", async ({ page }, info) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable the local speech service for the real transcription workflow");
+  test.setTimeout(120000);
+  await page.goto(`${fixture}?realm=results-${info.project.name}&agents&speech&viewer=Alex`);
+  await join(page).click();
+  await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
+  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Meeting agents", exact: true });
+  await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks", { timeout: 15000 });
+  await expect.poll(() => page.evaluate(() => meetingTest.agentWakes().length), { timeout: 45000 }).toBeGreaterThan(0);
+  const session_id = (await page.evaluate(() => meetingTest.agentWakes()))[0].text.match(/session_id ([0-9a-f-]{36})/)[1];
+  const task = { session_id, key: "playtest-brief", title: "Draft the playtest brief", status: "working" };
+  await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), task);
+  await expect(panel).toContainText("Research helper · Working · Saved in chat");
+  await panel.getByRole("button", { name: "Remove Research helper from call", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
+  // The agent finishes after listening stopped; the meeting reflects it.
+  await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), { ...task, status: "done", result: "Brief posted in the thread." });
+  await expect(panel).toContainText("Research helper · Done · Saved in chat");
+  const result = (await page.evaluate(() => meetingTest.workspaceState())).messages[general].at(-1);
+  expect(result.text).toContain("Brief posted");
+  await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
+  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
+  const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
+  await transcript.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
+  await page.getByRole("button", { name: "Show room chat", exact: true }).click();
+  await linkGeneral(page);
+  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
+  await records.getByRole("button", { name: /General Voice/ }).click();
+  const results = records.getByRole("list", { name: "Meeting results" });
+  await expect(results.getByRole("listitem")).toHaveText(/Draft the playtest brief · Done · Research helper — Brief posted in the thread\./);
+  await results.getByRole("button", { name: "Open result in thread", exact: true }).click();
+  const target = (await page.evaluate(() => meetingTest.navigationTargets())).at(-1);
+  expect(target).toMatchObject({ kind: "conversation", channelId: general });
+  expect(target.messageId).toMatch(/^[0-9a-f]{64}$/);
+});
 test("transcribes a room without an agent or linked channel and preserves text across navigation, pause and leave", async ({ page, context }) => {
   test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for independent transcripts");
   test.setTimeout(90000);

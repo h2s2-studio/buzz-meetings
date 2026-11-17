@@ -81,7 +81,10 @@ export function apply(ctx: Context) {
   const transcript = makeMeetingTranscription(media);
   const liveAgents = makeLiveAgents(ctx, media, transcript);
   const records = meetingRecords(ctx.relay,ctx.artifactStorage);
-  const Records = recordsUI(React, records);
+  const Records = recordsUI(React, records, (channelId, messageId) => {
+    const live = ctx.relay.snapshot();
+    if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });
+  });
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
   ctx.effect(() => () => { transcript.close(); records.close(); });
   const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records });
