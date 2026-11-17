@@ -6,12 +6,12 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      BUZZ_STREAMS_BIND_ADDR: 127.0.0.1:8091
+      BUZZ_MEETINGS_BIND_ADDR: 127.0.0.1:8091
       LIVEKIT_URL: ${LIVEKIT_URL:?Set the public wss URL}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?Set a LiveKit API key}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?Set a LiveKit API secret}
-      ROOM_CREATION_KEY: ${ROOM_CREATION_KEY:?Set a random room creation key}
-      ROOM_PROXY_KEY: ${ROOM_PROXY_KEY:-}
+      MEETING_ACCESS_KEY: ${MEETING_ACCESS_KEY:?Set a random room creation key}
+      MEETING_PROXY_KEY: ${MEETING_PROXY_KEY:-}
   livekit:
     image: livekit/livekit-server:v1.13.11
     network_mode: host

@@ -14,10 +14,10 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let bind_addr: SocketAddr = env::var("BUZZ_STREAMS_BIND_ADDR")
+        let bind_addr: SocketAddr = env::var("BUZZ_MEETINGS_BIND_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:8091".into())
             .parse()
-            .context("invalid BUZZ_STREAMS_BIND_ADDR")?;
+            .context("invalid BUZZ_MEETINGS_BIND_ADDR")?;
         let livekit_url = Url::parse(&required("LIVEKIT_URL")?).context("invalid LIVEKIT_URL")?;
         let loopback = match livekit_url.host() {
             Some(Host::Domain("localhost")) => true,
@@ -34,24 +34,24 @@ impl Config {
                 && livekit_url.fragment().is_none(),
             "LIVEKIT_URL must be a wss URL or a loopback ws URL"
         );
-        let room_creation_key = required("ROOM_CREATION_KEY")?;
+        let room_creation_key = required("MEETING_ACCESS_KEY")?;
         ensure!(
             (24..=256).contains(&room_creation_key.len()),
-            "ROOM_CREATION_KEY must be 24–256 bytes"
+            "MEETING_ACCESS_KEY must be 24–256 bytes"
         );
-        let room_proxy_key = env::var("ROOM_PROXY_KEY")
+        let room_proxy_key = env::var("MEETING_PROXY_KEY")
             .ok()
             .filter(|key| !key.is_empty());
         if let Some(key) = &room_proxy_key {
             ensure!(
                 bind_addr.ip().is_loopback(),
-                "ROOM_PROXY_KEY requires a loopback listener"
+                "MEETING_PROXY_KEY requires a loopback listener"
             );
             ensure!(
                 key.len() == 64
                     && key.bytes().all(|byte| byte.is_ascii_hexdigit())
                     && key != &room_creation_key,
-                "ROOM_PROXY_KEY must be a separate 64-character hexadecimal key"
+                "MEETING_PROXY_KEY must be a separate 64-character hexadecimal key"
             );
         }
         Ok(Self {

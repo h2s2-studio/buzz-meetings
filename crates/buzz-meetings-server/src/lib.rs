@@ -33,8 +33,21 @@ const PROXY_KEY_HEADER: &str = "x-buzz-streams-proxy-key";
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Request {
-    Create { name: String, key: Option<String> },
-    Join { name: String, code: String },
+    Create {
+        name: String,
+        key: Option<String>,
+    },
+    Join {
+        name: String,
+        code: String,
+    },
+    Meeting {
+        name: String,
+        community: String,
+        room: String,
+        picture: Option<String>,
+        key: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -116,7 +129,59 @@ impl RoomService {
             .lock()
             .map_err(|_| "Room service unavailable.")?;
         invitations.retain(|_, room| room.expires_at > now);
+        let meeting = matches!(&request, Request::Meeting { .. });
+        let mut metadata = None;
         let (name, room_name, invite) = match request {
+            Request::Meeting {
+                name,
+                community,
+                room,
+                picture,
+                key,
+            } => {
+                if let Some(key) = key {
+                    if !matches_key(&self.creation_key_digest, key.as_bytes()) {
+                        return Err("The meeting access key was rejected.");
+                    }
+                } else if !trusted_proxy {
+                    return Err("Meeting access requires an access key or a configured private community proxy.");
+                }
+                let origin = Url::parse(&community).map_err(|_| "Invalid meeting community.")?;
+                if !matches!(origin.scheme(), "https" | "http")
+                    || origin.host_str().is_none()
+                    || !origin.username().is_empty()
+                    || origin.password().is_some()
+                    || origin.path() != "/"
+                    || origin.query().is_some()
+                    || origin.fragment().is_some()
+                {
+                    return Err("Invalid meeting community.");
+                }
+                let room = room.trim().to_lowercase();
+                if room.is_empty()
+                    || room.chars().count() > 64
+                    || room.chars().any(char::is_control)
+                {
+                    return Err("Enter a room name of 1–64 characters.");
+                }
+                let picture = picture.filter(|value| value.len() <= 2048).filter(|value| {
+                    Url::parse(value).is_ok_and(|url| {
+                        url.scheme() == "https"
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                    })
+                });
+                metadata = Some(serde_json::json!({ "picture": picture }).to_string());
+                let digest = Sha256::digest(
+                    format!("{}\n{}", origin.origin().ascii_serialization(), room).as_bytes(),
+                );
+                (
+                    name,
+                    format!("meeting-{}", URL_SAFE_NO_PAD.encode(digest)),
+                    None,
+                )
+            }
             Request::Create { name, key } => {
                 if let Some(key) = key {
                     if !matches_key(&self.creation_key_digest, key.as_bytes()) {
@@ -148,13 +213,18 @@ impl RoomService {
         let token = AccessToken::with_api_key(&self.api_key, &self.api_secret)
             .with_identity(&random_code())
             .with_name(name)
+            .with_metadata(&metadata.unwrap_or_default())
             .with_ttl(Duration::from_secs(90))
             .with_grants(VideoGrants {
                 room: room_name.clone(),
                 room_join: true,
                 can_subscribe: Some(true),
                 can_publish: Some(true),
-                can_publish_sources: vec!["screen_share".into()],
+                can_publish_sources: if meeting {
+                    vec!["microphone".into(), "camera".into(), "screen_share".into()]
+                } else {
+                    vec!["screen_share".into()]
+                },
                 can_publish_data: Some(false),
                 can_update_own_metadata: Some(false),
                 ..Default::default()
@@ -239,6 +309,109 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn meeting(community: &str, room: &str, key: Option<&str>) -> Request {
+        Request::Meeting {
+            name: "Alex".into(),
+            community: community.into(),
+            room: room.into(),
+            picture: Some("javascript:alert(1)".into()),
+            key: key.map(str::to_owned),
+        }
+    }
+
+    fn claims(reply: Reply<'_>) -> serde_json::Value {
+        let Reply::Admitted { token, .. } = reply else {
+            panic!("expected admission");
+        };
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(token.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn meetings_require_access_and_scope_media_to_one_named_room() {
+        let service = RoomService::new(
+            Url::parse("ws://127.0.0.1:7880").unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "meeting-key",
+        );
+        assert!(service
+            .admit(
+                meeting("https://buzz.example.org", "General Voice", None),
+                0,
+                false
+            )
+            .is_err());
+        assert!(service
+            .admit(
+                meeting("https://buzz.example.org", "General Voice", Some("wrong")),
+                0,
+                true
+            )
+            .is_err());
+        let first = claims(
+            service
+                .admit(
+                    meeting(
+                        "https://buzz.example.org",
+                        "General Voice",
+                        Some("meeting-key"),
+                    ),
+                    0,
+                    false,
+                )
+                .unwrap(),
+        );
+        let same = claims(
+            service
+                .admit(
+                    meeting("https://buzz.example.org", "general voice", None),
+                    0,
+                    true,
+                )
+                .unwrap(),
+        );
+        let other_room = claims(
+            service
+                .admit(meeting("https://buzz.example.org", "Design", None), 0, true)
+                .unwrap(),
+        );
+        let other_community = claims(
+            service
+                .admit(
+                    meeting("https://another.example.org", "General Voice", None),
+                    0,
+                    true,
+                )
+                .unwrap(),
+        );
+        assert_eq!(first["video"]["room"], same["video"]["room"]);
+        assert_ne!(first["sub"], same["sub"]);
+        assert_ne!(first["video"]["room"], other_room["video"]["room"]);
+        assert_ne!(first["video"]["room"], other_community["video"]["room"]);
+        assert_eq!(first["video"]["canPublishData"], false);
+        assert_eq!(
+            first["video"]["canPublishSources"],
+            serde_json::json!(["microphone", "camera", "screen_share"])
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_str(first["metadata"].as_str().unwrap()).unwrap();
+        assert!(metadata["picture"].is_null());
+        for (origin, room) in [
+            ("https://user:pass@buzz.example.org", "General"),
+            ("https://buzz.example.org/path", "General"),
+            ("https://buzz.example.org", "\n"),
+        ] {
+            assert!(service
+                .admit(meeting(origin, room, Some("meeting-key")), 0, false)
+                .is_err());
+        }
+    }
 
     #[test]
     fn room_admission_requires_creation_key_or_current_invite() {

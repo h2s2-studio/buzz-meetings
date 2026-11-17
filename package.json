@@ -1,23 +1,21 @@
 {
-  "name": "h2s2-buzz-screen-sharing",
-  "version": "0.3.3",
+  "name": "h2s2-buzz-meetings",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "cargo run --locked -p buzz-streams-room-service",
-    "test": "node --test test/signaling.test.mjs",
+    "start": "cargo run --locked -p buzz-meetings-server",
+    "test": "node --experimental-strip-types --test test/protocol.test.mjs",
     "test:browser": "playwright test",
-    "start:legacy": "node server/index.mjs",
     "build": "tsc && node scripts/build.mjs",
     "check:build": "tsc && node scripts/build.mjs --check",
     "test:media": "node scripts/test-media.mjs"
   },
   "dependencies": {
-    "livekit-client": "2.24.1",
-    "ws": "8.23.0"
+    "livekit-client": "2.24.1"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

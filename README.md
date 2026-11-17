@@ -1,90 +1,79 @@
-# Huddle Screen Sharing for Buzz
+# Buzz Meetings
 
-An H2S2 Studio plugin for sharing and watching screens inside Buzz Desktop.
-Multiple Huddle participants can publish at once. Viewers pick one stream,
-switch between presenters, and keep their Buzz voice call connected.
+Voice rooms, cameras, and screen sharing in one Buzz app. Click **General Voice**
+to join audio, see connected participants beneath the room, and share or watch
+screens without copying a separate video invitation. Meetings uses the Rust
+admission server and LiveKit for voice and video.
 
-![Watching Alex in the Streams player, with playback quality below and Riley’s stream available in the adjacent live streams list](docs/screenshots/streams-viewer.png)
+![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
-## Install from GitHub
+## Install in Buzz
 
-In Buzz Desktop, open **Settings → Plugins → Manage plugins → Add**. Paste
-`https://github.com/h2s2-studio/buzz-huddle-screen-sharing` into **Git or GitHub
-repository**, leave **Folder** blank, then select **Find → Install plugin** and
-enable it. Use **Branch or tag** to pin a tagged release. Leave it blank to
-follow the default branch with **Check for updates**. Buzz reads the committed
-`manifest.json` and `plugin.js` from the root and builds nothing at install time.
+1. Open **Settings → Plugins → Manage plugins → Add**.
+2. Paste `https://github.com/h2s2-studio/buzz-meetings` into **Git or GitHub repository**.
+   Leave Folder empty. Choose **Find → Install plugin** and enable **Meetings**.
+3. Open **Meetings** in the app dock. Its **Voice Channels** sidebar includes
+   **General Voice** automatically.
+4. Click the room to join. Allow microphone permission when your system asks.
+   Your avatar and name appear after connecting. Click **Share screen** to choose
+   a screen or window in the system picker. Use **Watch** to view someone’s
+   stream, or **Watch all screens** for a grid.
 
-If you installed a local copy, remove it before installing from GitHub so Buzz
-records GitHub as the update source. For the original one-presenter,
-one-viewer WebSocket setup, pin [v0.2.0](https://github.com/h2s2-studio/buzz-huddle-screen-sharing/tree/v0.2.0).
+Your community must run the [Meetings deployment](docs/deployment.md). By default,
+the app uses the community’s `/rooms` endpoint. For a separate service, open
+**Connection settings** and enter its `wss://…/rooms` address and access key.
+Access keys stay in memory and are cleared when your identity or community changes.
 
-## Try it on one device
+The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
+build at install. Pin **Branch or tag** to `v0.1.0` for this release, or leave it
+empty to follow main and use **Check for updates**.
 
-Open **Streams → Test my screen** from a conversation and select a source in the
-system picker. The test sends video between two WebRTC peers inside the same
-Buzz window. It works without a Huddle or a server. Select **Stop test** or
-close the panel to release capture.
+## In a room
 
-## Share in a Huddle
+- Mute, deafen, turn your camera on/off, or leave from the call controls.
+  Deafen also mutes your microphone; undeafening leaves it muted until you unmute.
+- Change your screen source without ending the call. Stop sharing independently
+  of leaving voice. Balanced and Sharp text presets offer up to 720p/30 and
+  1080p/30; a focused viewer can choose available simulcast layers.
+- Switch back to Messages while audio and screen sharing continue. The Buzz
+  toolbar retains return-to-room, mute, deafen, and leave actions.
+- Leaving, changing community/identity, or disabling the plugin stops capture
+  and remote playback. Reconnecting is shown explicitly.
+- Add named rooms with the sidebar’s **+**. Room names are saved on this device;
+  others add the same name to join the same room on the same community/service.
 
-1. Everyone installs the plugin and joins the Huddle in Buzz.
-2. Select the monitor icon in the conversation header, then **Share screen**.
-   Choose a source in the system picker.
-   A compatible community deployment creates the session automatically. For a
-   service on another host or one that requires a key, use **Room service settings**.
-3. Select **Copy invite link** and paste it into Buzz. Recipients open it and
-   select **Join streams**. They can also paste it into **Join from an invite**.
-   Streams uses their Buzz display names when available.
-4. Select **Watch stream** beside a presenter. **Viewer quality** shows Auto and
-   the advertised layers for that stream. The player displays the actual
-   incoming resolution and offers **Fullscreen**. You can watch while sharing.
-   **Change source** keeps the same stream and preserves the old source if canceled.
+## Release boundaries
 
-**Your preview** fills the player while you share. When you watch another
-presenter, your own preview moves alongside the stream list. **Hide preview**
-keeps the share live and helps avoid a recursive view when sharing your desktop.
+This first release provides the core room/call workflow; it is not full Discord
+or Teams feature parity. The roster is live for the room you joined. Cross-room
+occupancy and shared room discovery are not implemented. Display names and
+avatars are supplied from client Buzz profiles; broker admission uses a deployment
+access key or private proxy, not verified Buzz channel membership. Camera,
+microphone, and screen capture depend on the desktop webview and OS permissions.
+Application/system audio sharing is not implemented in this release.
 
-![The narrow presenter panel showing the local preview, change source, fullscreen, and stop sharing controls](docs/screenshots/streams-presenter.png)
+The media workflow is exercised against the Rust broker and a real local
+LiveKit instance using synthetic audio/video in Chromium and WebKit. Physical
+microphone, camera, screen capture, and restrictive-network checks remain required
+for your deployment. Native Huddles and its agent voice integration are separate.
 
-**Stop sharing** is also available in the Buzz toolbar while capture is active.
-Switching conversations keeps the stream open. Leaving the Huddle ends the
-local media session and stops capture. Streams carry screen video. Buzz
-continues to handle voice. System audio is outside this prerelease.
-
-## Host a deployment
-
-One operator runs the **Rust room service** and **LiveKit** for their community.
-They can run alongside a Buzz relay on a Linux VM. Other users install the plugin
-and open the invite inside Buzz. See the [deployment guide](docs/deployment.md).
-
-Room admission uses a 15-minute invite and a short-lived LiveKit token restricted
-to the room and screen-share publishing. Anyone with the link can request access
-during its lifetime. Send links to the intended participants. Buzz plugin API v1
-exposes local call phase and does not verify who is in the same Huddle. The
-[upstream design](docs/product.md) describes the integration needed for that.
-
-## Authoring and verification
-
-The plugin source uses TypeScript and TSX. Buzz supplies React. The build emits a
-self-contained JavaScript module and CI checks it against the committed artifact.
-The sidecar lives in the Rust workspace under `crates/buzz-streams-room-service`.
+## Develop
 
 ```sh
 npm ci
 npm run build
 npm run check:build
+npm test
+cargo fmt --all --check
 cargo test --locked --workspace
 cargo build --locked
 npx playwright install chromium webkit
 LIVEKIT_SERVER_BIN=livekit-server npm run test:media
 ```
 
-Media tests launch the Rust service and a real local LiveKit instance. They use
-synthetic capture tracks to verify solo playback, multi-presenter playback,
-quality changes, source replacement, and teardown. Native Windows and Linux
-screen capture still need physical device checks. Linux may require Buzz to
-grant display-capture permission through its webview host.
+For reloadable local development, install the folder through **Manage plugins →
+Add → Browse** under Add from folder, then reload after rebuilding.
 
-Build a standalone artifact with
-`buzzodz plugin pack . huddle-screen-sharing.buzzplugin`.
+Buzz Meetings consolidates the H2S2 Studio voice-channels and Huddle
+screen-sharing prototypes. The existing video transport and its Git history are
+retained here. Apache-2.0; see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

@@ -1,4 +1,4 @@
-streams.example.org {
+meetings.example.org {
     handle /rooms {
         reverse_proxy 127.0.0.1:8091
     }

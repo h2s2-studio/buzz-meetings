@@ -2,5 +2,5 @@
 !Cargo.toml
 !Cargo.lock
 !crates/
-!crates/buzz-streams-room-service/
-!crates/buzz-streams-room-service/**
+!crates/buzz-meetings-server/
+!crates/buzz-meetings-server/**

@@ -1,4 +1,4 @@
-export const pluginId = "studio.h2s2.screen-sharing";
+export const pluginId = "studio.h2s2.meetings";
 export const invitePage = "join-streams";
 export const invitePattern = /^[A-Za-z0-9_-]{32}$/;
 export const nameLimit = 48;
@@ -6,7 +6,8 @@ export const nameLimit = 48;
 export type Invite = { broker: string; code: string };
 export type RoomRequest =
   | { type: "create"; name: string; key?: string }
-  | { type: "join"; name: string; code: string };
+  | { type: "join"; name: string; code: string }
+  | { type: "meeting"; name: string; community: string; room: string; picture?: string; key?: string };
 export type RoomAdmission = {
   type: "admitted";
   url: string;

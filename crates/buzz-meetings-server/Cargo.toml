@@ -1,6 +1,6 @@
 [package]
-name = "buzz-streams-room-service"
-description = "Issues screen-share admission tokens for a self-hosted Buzz Streams deployment"
+name = "buzz-meetings-server"
+description = "Issues screen-share admission tokens for a self-hosted Buzz Meetings deployment"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

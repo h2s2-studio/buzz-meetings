@@ -1,12 +1,12 @@
 [workspace]
-members = ["crates/buzz-streams-room-service"]
+members = ["crates/buzz-meetings-server"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/h2s2-studio/buzz-huddle-screen-sharing"
+repository = "https://github.com/h2s2-studio/buzz-meetings"
 
 [workspace.dependencies]
 # Match the Buzz relay's runtime, HTTP, serialization and observability stack.

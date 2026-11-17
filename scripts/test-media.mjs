@@ -65,13 +65,13 @@ rtc:
 logging:
   level: error`,
   ]);
-  const broker = start(process.env.ROOM_SERVICE_BIN || "./target/debug/buzz-streams-room-service", [], {
-    BUZZ_STREAMS_BIND_ADDR: `${host}:${brokerPort}`,
+  const broker = start(process.env.ROOM_SERVICE_BIN || "./target/debug/buzz-meetings-server", [], {
+    BUZZ_MEETINGS_BIND_ADDR: `${host}:${brokerPort}`,
     LIVEKIT_URL: `ws://${host}:${liveKitPort}`,
     LIVEKIT_API_KEY: "devkey",
     LIVEKIT_API_SECRET: "secret",
-    ROOM_CREATION_KEY: key,
-    ROOM_PROXY_KEY: proxyKey,
+    MEETING_ACCESS_KEY: key,
+    MEETING_PROXY_KEY: proxyKey,
   });
   await Promise.all([
     ready(`http://${host}:${liveKitPort}/`, liveKit),

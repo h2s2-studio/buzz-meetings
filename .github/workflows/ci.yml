@@ -51,11 +51,11 @@ jobs:
       - if: runner.os == 'Linux'
         name: Validate deployment configuration
         env:
-          LIVEKIT_URL: wss://streams.example.org
+          LIVEKIT_URL: wss://meetings.example.org
           LIVEKIT_NODE_IP: 192.0.2.10
           LIVEKIT_API_KEY: example-test-key
           LIVEKIT_API_SECRET: example-test-lk-secret
-          ROOM_CREATION_KEY: example-test-creation-key
+          MEETING_ACCESS_KEY: example-test-creation-key
         run: docker compose -f deploy/compose.yaml config --quiet
       - run: npx playwright install ${{ matrix.browser-install }}
       - if: runner.os == 'Linux'

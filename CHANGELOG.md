@@ -1,45 +1,13 @@
 # Changelog
 
-## v0.3.3
+## 0.1.0 — Meetings
 
-- Make the video the main surface for previewing your share and watching a presenter.
-- Group source, quality, fullscreen, and stop actions with the player. Keep
-  your own preview accessible when watching another stream.
-- Show live presenters beside the player when space allows and below it in a
-  narrow panel. Use native Buzz button styles and theme tokens.
+- Consolidate the voice-room and screen-sharing experience into a Meetings dock app.
+- Create the Voice Channels section with General Voice automatically.
+- Join named rooms with microphone audio and live participants from one click.
+- Add mute, deafen, camera, and persistent leave controls.
+- Reuse the LiveKit screen transport with source changes, quality selection, and a multiple-screen grid.
+- Package the Rust admission server and a Compose/Caddy deployment beside a Buzz relay.
+- Stop capture and playback on leave, community changes, plugin shutdown, and canceled joins.
 
-## v0.3.2
-
-- Show a local preview while sharing. The preview follows source changes and
-  can be collapsed while the share continues.
-- Use a monitor icon in the conversation header with an active-sharing marker.
-- Place the share, invite and stop controls above the preview. Offer a selectable
-  invite link when clipboard access is denied.
-- Use **Screen sharing** and a shorter description in the plugin catalog.
-  Package a monitor tile for hosts that display installed plugin artwork.
-
-## v0.3.1
-
-- Open the system picker directly from **Share screen**. Create a room after
-  selection through the community’s trusted private proxy.
-- Use the existing Buzz profile name when available and join an invite without
-  a naming step. Keep custom broker setup under **Room service settings**.
-
-## v0.3.0
-
-- Added multi-presenter rooms, in-Buzz invites, selective playback, viewer
-  quality and resolution, presenter presets, and source replacement.
-- Added a toolbar stop control that stays available while navigating Buzz.
-- Moved plugin authoring to TypeScript and kept the generated JavaScript at the
-  GitHub install root.
-- Added a Rust room service and self-hosted LiveKit deployment sample.
-  The v0.2.0 tag still installs the original one-viewer plugin.
-
-## 0.2.0 · 2026-11-16
-
-- Install directly from the H2S2 Studio GitHub repository using Buzz’s Git importer.
-- Test your screen picker and WebRTC playback locally without joining a Huddle.
-- Share video with one viewer using an expiring code and a configured signaling service.
-- Run signaling and playback tests in Chromium and WebKit.
-
-The native screen-picker compatibility matrix and a hosted live Huddle test are pending.
+The earlier screen-sharing transport history remains in this repository.

@@ -1,6 +1,6 @@
 import {
   Room, RoomEvent, Track, VideoPresets, VideoQuality,
-  type LocalVideoTrack, type RemoteTrackPublication,
+  type LocalVideoTrack, type RemoteTrackPublication, type LocalAudioTrack, type Participant,
 } from "livekit-client";
 import { requestRoom } from "./admission";
 import { captureError, captureScreen, limitCapture, presets, stopStream, type Preset } from "./capture";
@@ -26,6 +26,12 @@ type ActiveRoom = {
   remote?: MediaStream;
   quality: Quality;
   ticker?: ReturnType<typeof setInterval>;
+  microphone?: LocalAudioTrack;
+  pendingMicrophone?: MediaStream;
+  audio: Map<string, HTMLMediaElement>;
+  deafened: boolean;
+  roomName?: string;
+  grid: Map<string, RemoteTrackPublication>;
 };
 type Quality = VideoQuality | "auto";
 type Stream = { id: string; presenter: string; muted: boolean };
@@ -41,9 +47,17 @@ export type RoomSnapshot = {
   video?: MediaStream;
   quality: Quality;
   layers: { value: VideoQuality; height: number }[];
+  roomName?: string;
+  participants: { id: string; name: string; picture?: string; local: boolean; speaking: boolean; muted: boolean; video?: MediaStream }[];
+  muted: boolean;
+  deafened: boolean;
+  audioBlocked: boolean;
+  screens: { id: string; presenter: string; video: MediaStream }[];
+  camera: boolean;
 };
 const idle: RoomSnapshot = {
   phase: "idle", picking: false, stopping: false, streams: [], quality: "auto", layers: [],
+  participants: [], muted: false, deafened: false, audioBlocked: false, screens: [], camera: false,
 };
 
 function layers(publication?: RemoteTrackPublication): RoomSnapshot["layers"] {
@@ -62,6 +76,7 @@ function layers(publication?: RemoteTrackPublication): RoomSnapshot["layers"] {
 export function makeRoomSession() {
   let active: ActiveRoom | undefined;
   let snapshot = idle;
+  let teardown: Promise<void> = Promise.resolve();
   const listeners = new Set<() => void>();
   function emit(next: RoomSnapshot) {
     snapshot = next;
@@ -84,6 +99,7 @@ export function makeRoomSession() {
       run.remote = track ? new MediaStream([track]) : undefined;
     }
     const available = layers(run.watching);
+    for (const id of run.grid.keys()) if (!streams.some(stream => stream.id === id)) run.grid.delete(id);
     if (run.quality !== "auto" && !available.some(({ value }) => value === run.quality)) {
       run.quality = "auto";
       run.watching?.setVideoQuality(VideoQuality.HIGH);
@@ -94,6 +110,25 @@ export function makeRoomSession() {
         label: run.publish.label, preset: run.publish.preset, preview: run.publish.preview,
       },
       watching: run.watching?.trackSid, video: run.remote, quality: run.quality, layers: available,
+      roomName: run.roomName,
+      participants: phase === "connecting" ? [] : [run.room.localParticipant, ...run.room.remoteParticipants.values()].map((person: Participant) => {
+        let picture: string | undefined;
+        try { picture = JSON.parse(person.metadata || "{}").picture; } catch { /* Guest without a picture. */ }
+        const cameraTrack = person.isCameraEnabled ? person.getTrackPublication(Track.Source.Camera)?.videoTrack?.mediaStreamTrack : undefined;
+        const previous = snapshot.participants.find(item => item.id === person.identity)?.video;
+        return { id: person.identity, name: person.name || "Participant", picture,
+          local: person === run.room.localParticipant, speaking: person.isSpeaking,
+          muted: !person.isMicrophoneEnabled,
+          video: cameraTrack ? previous?.getVideoTracks()[0] === cameraTrack ? previous : new MediaStream([cameraTrack]) : undefined };
+      }),
+      muted: run.microphone?.isMuted ?? false, deafened: run.deafened,
+      audioBlocked: !run.room.canPlaybackAudio,
+      camera: run.room.localParticipant.isCameraEnabled,
+      screens: [...run.grid].flatMap(([id, publication]) => {
+        const track = publication.videoTrack?.mediaStreamTrack;
+        const previous = snapshot.screens.find(screen => screen.id === id)?.video;
+        return track ? [{ id, presenter: streams.find(stream => stream.id === id)?.presenter || "Participant", video: previous?.getVideoTracks()[0] === track ? previous : new MediaStream([track]) }] : [];
+      }),
     });
   }
 
@@ -105,7 +140,12 @@ export function makeRoomSession() {
       run.abort.abort();
       run.pending?.stop();
       run.publish?.source.stop();
-      void run.room.disconnect().catch(() => {});
+      stopStream(run.pendingMicrophone);
+      run.microphone?.stop();
+      run.room.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.stop();
+      for (const element of run.audio.values()) { element.pause(); element.srcObject = null; element.remove(); }
+      run.audio.clear();
+      teardown = run.room.disconnect().catch(() => {});
     }
     emit({ ...idle, error });
   }
@@ -119,16 +159,46 @@ export function makeRoomSession() {
       return leave("Enter a secure room service URL ending in /rooms.");
     }
     const room = new Room({ dynacast: true });
-    const run: ActiveRoom = { room, abort: new AbortController(), quality: "auto", picking: preset !== undefined, stopping: false };
+    const run: ActiveRoom = { room, abort: new AbortController(), quality: "auto", picking: preset !== undefined, stopping: false,
+      audio: new Map(), grid: new Map(), deafened: false, roomName: request.type === "meeting" ? request.room : undefined };
     active = run;
     refresh(run, "connecting", "");
     const sync = () => refresh(run);
     room
+      .on(RoomEvent.ParticipantConnected, (person) => {
+        for (const publication of person.trackPublications.values()) {
+          if (publication.source === Track.Source.Microphone || publication.source === Track.Source.Camera) publication.setSubscribed(true);
+        }
+        sync();
+      })
       .on(RoomEvent.ParticipantDisconnected, sync)
-      .on(RoomEvent.TrackPublished, sync)
+      .on(RoomEvent.TrackPublished, (publication) => {
+        if (request.type === "meeting" && [Track.Source.Microphone, Track.Source.Camera].includes(publication.source)) publication.setSubscribed(true);
+        sync();
+      })
       .on(RoomEvent.TrackUnpublished, sync)
-      .on(RoomEvent.TrackSubscribed, sync)
-      .on(RoomEvent.TrackUnsubscribed, sync)
+      .on(RoomEvent.TrackSubscribed, (track, publication) => {
+        if (active !== run) return;
+        if (request.type === "meeting" && track.kind === Track.Kind.Audio) {
+          const element = track.attach();
+          element.muted = run.deafened;
+          element.setAttribute("data-meeting-audio", publication.trackSid);
+          run.audio.set(publication.trackSid, element);
+          document.body.append(element);
+          void element.play().catch(sync);
+        }
+        sync();
+      })
+      .on(RoomEvent.TrackUnsubscribed, (track, publication) => {
+        const owned = run.audio.get(publication.trackSid);
+        if (owned) { owned.pause(); owned.srcObject = null; owned.remove(); }
+        for (const element of track.detach()) { element.pause(); element.srcObject = null; element.remove(); }
+        run.audio.delete(publication.trackSid);
+        sync();
+      })
+      .on(RoomEvent.ActiveSpeakersChanged, sync)
+      .on(RoomEvent.AudioPlaybackStatusChanged, sync)
+      .on(RoomEvent.ParticipantMetadataChanged, sync)
       .on(RoomEvent.TrackMuted, sync)
       .on(RoomEvent.TrackUnmuted, sync)
       .on(RoomEvent.TrackSubscriptionFailed, (sid) => {
@@ -145,6 +215,15 @@ export function makeRoomSession() {
 
     let source: MediaStreamTrack | undefined;
     try {
+      if (request.type === "meeting") {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture isn’t available in this Buzz installation.");
+        // Acquire from this explicit room click, before network work. A canceled
+        // permission prompt must never leave capture running in another room.
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        if (active !== run) { stopStream(stream); return; }
+        run.pendingMicrophone = stream;
+        void room.startAudio().catch(sync);
+      }
       if (preset) {
         try {
           source = await pickSource(run, preset);
@@ -165,6 +244,8 @@ export function makeRoomSession() {
         };
       }
       try {
+        await teardown;
+        if (active !== run) return;
         await room.connect(admission.url, admission.token, { autoSubscribe: false, maxRetries: 0 });
       } catch {
         throw new Error("Couldn’t connect to the video service. Check the room service’s LiveKit setup.");
@@ -174,20 +255,73 @@ export function makeRoomSession() {
         return;
       }
       if (source && preset) await publishSource(run, source, preset);
+      if (run.pendingMicrophone) {
+        const track = run.pendingMicrophone.getAudioTracks()[0];
+        if (!track || track.readyState !== "live") throw new Error("The microphone is unavailable.");
+        const publication = await room.localParticipant.publishTrack(track, { source: Track.Source.Microphone });
+        if (active !== run) { track.stop(); await room.disconnect(); return; }
+        run.microphone = publication.audioTrack;
+        if (!run.microphone) throw new Error("Couldn’t publish microphone audio.");
+        track.addEventListener("ended", () => { if (active === run) leave("The microphone disconnected. Join the room to try again."); }, { once: true });
+        for (const person of room.remoteParticipants.values()) {
+          person.getTrackPublication(Track.Source.Microphone)?.setSubscribed(true);
+          person.getTrackPublication(Track.Source.Camera)?.setSubscribed(true);
+        }
+      }
       if (active !== run) return;
       run.pending = undefined;
       // The SFU can advertise its encodings after announcing the publication.
       run.ticker = setInterval(sync, 2000);
       refresh(run, "connected", "");
     } catch (error) {
-      if (active === run) leave(error instanceof Error ? error.message : "Couldn’t join the sharing session.");
+      if (active === run) leave(error instanceof DOMException && error.name === "NotAllowedError"
+        ? "Microphone permission was denied. Allow microphone access, then join again."
+        : error instanceof Error ? error.message : "Couldn’t join the meeting.");
     }
+  }
+
+  async function setMuted(muted: boolean) {
+    const run = active;
+    if (!run?.microphone || snapshot.phase !== "connected" || (!muted && run.deafened)) return;
+    try {
+      if (muted) run.microphone.mediaStreamTrack.enabled = false;
+      if (muted) await run.microphone.mute(); else await run.microphone.unmute();
+      refresh(run);
+    } catch { refresh(run, undefined, "Couldn’t change the microphone. Leave and rejoin to retry."); }
+  }
+
+  async function setDeafened(deafened: boolean) {
+    const run = active;
+    if (!run || snapshot.phase !== "connected") return;
+    run.deafened = deafened;
+    for (const element of run.audio.values()) element.muted = deafened;
+    if (deafened) await setMuted(true);
+    refresh(run);
+  }
+
+  async function resumeAudio() {
+    const run = active;
+    if (!run) return;
+    try { await run.room.startAudio(); refresh(run); }
+    catch { refresh(run, undefined, "Audio playback is blocked. Check this app’s audio permissions."); }
+  }
+
+  async function setCamera(enabled: boolean) {
+    const run = active;
+    if (!run || snapshot.phase !== "connected") return;
+    try {
+      const publication = await run.room.localParticipant.setCameraEnabled(enabled, { resolution: { width: 640, height: 360 } });
+      if (active !== run) { publication?.track?.stop(); return; }
+      refresh(run);
+    } catch { refresh(run, undefined, "Couldn’t open the camera. Check camera permissions and try again."); }
   }
 
   function changeWatch(id?: string) {
     const run = active;
     if (!run || (id && snapshot.phase !== "connected")) return;
-    if (run.watching?.trackSid === id) return;
+    if (run.watching?.trackSid === id && !run.grid.size) return;
+    for (const publication of run.grid.values()) publication.setSubscribed(false);
+    run.grid.clear();
     run.watching?.setSubscribed(false);
     run.watching = undefined;
     run.quality = "auto";
@@ -203,6 +337,18 @@ export function makeRoomSession() {
       }
     }
     refresh(run, undefined, "");
+  }
+
+  function watchAll() {
+    const run = active;
+    if (!run || snapshot.phase !== "connected") return;
+    run.watching = undefined;
+    run.quality = "auto";
+    for (const person of run.room.remoteParticipants.values()) {
+      const publication = person.getTrackPublication(Track.Source.ScreenShare);
+      if (publication) { run.grid.set(publication.trackSid, publication); publication.setSubscribed(true); publication.setVideoQuality(VideoQuality.MEDIUM); }
+    }
+    refresh(run);
   }
 
   function quality(value: Quality) {
@@ -312,7 +458,7 @@ export function makeRoomSession() {
   }
 
   return {
-    connect, leave, changeWatch, quality, share, stopSharing,
+    connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera,
     snapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);

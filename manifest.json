@@ -1,10 +1,7 @@
 {
-	"id": "studio.h2s2.screen-sharing",
-	"name": "Screen sharing",
-	"apiVersion": 1,
-	"description": "Share and watch screens during a Huddle.",
-	"discovery": {
-		"category": "communication",
-		"tags": ["huddles", "screen-sharing"]
-	}
+  "id": "studio.h2s2.meetings",
+  "name": "Meetings",
+  "apiVersion": 1,
+  "description": "Voice rooms, cameras, and screen sharing in one Meetings app.",
+  "discovery": { "category": "communication", "tags": ["meetings", "voice", "screen-sharing"] }
 }
