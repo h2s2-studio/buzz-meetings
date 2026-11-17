@@ -56,3 +56,10 @@
 @media (max-width: 760px) { .meeting-content { flex-direction: column; padding: var(--space-4); }.meeting-streams { flex: none; width: 100%; }.meeting-footer { padding: var(--space-3); gap: var(--space-2); }.meeting-footer-status { display: none; }.meeting-footer { grid-template-columns: 1fr auto; }.meeting-callbar { justify-content: flex-start; flex-wrap: wrap; }.meeting-header-count { display: none; } }
 .meeting-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }.meeting-body > .meeting-content { min-width: 0; }.meeting-chat { flex: 0 1 22rem; width: 22rem; min-width: 17rem; min-height: 0; display: flex; flex-direction: column; border-inline-start: 1px solid var(--border-standard); }.meeting-chat > :first-child:not(header) { flex: 1; min-height: 0; }.meeting-chat-setup { display: grid; align-content: start; gap: var(--space-4); padding: var(--space-panel-inset); }.meeting-chat-setup label { display: grid; gap: var(--space-2); }.meeting-chat-setup p { margin: 0; }
 @media (max-width: 1050px) { .meeting-body { flex-direction: column; overflow: auto; }.meeting-body > .meeting-content { flex: 1 0 22rem; overflow: visible; }.meeting-chat { flex: 0 0 24rem; width: 100%; min-width: 0; border-inline-start: 0; border-block-start: 1px solid var(--border-standard); } }
+/* Keep two useful regions when chat is open; stream choices become a strip. */
+.meeting-body[data-chat-open] > .meeting-content { flex-direction: column; }
+.meeting-body[data-chat-open] .meeting-streams { flex: 0 0 auto; width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; }
+.meeting-body[data-chat-open] .meeting-streams-header { width: 100%; }
+.meeting-body[data-chat-open] .meeting-streams > .navigation-item { flex: 1 1 12rem; width: auto; }
+.meeting-body[data-chat-open] .meeting-preview { max-width: 12rem; }
+.meeting-screen-grid { grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); }

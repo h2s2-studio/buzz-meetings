@@ -138,14 +138,14 @@ export function apply(ctx: Context) {
     if (call.phase === "idle") return null;
     return <div className="meeting-callbar" role="group" aria-label="Meeting controls" data-compact={compact || undefined}>
       <span className="sr-only" role="status">{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
-      <Button label={call.muted ? "Unmute" : "Mute"} icon="microphone" iconOnly active={call.muted} disabled={busy || call.phase !== "connected" || call.deafened}
+      <Button label={call.muted ? "Unmute" : "Mute"} icon="microphone" iconOnly={compact} active={call.muted} disabled={busy || call.phase !== "connected" || call.deafened}
         onClick={() => { void change(() => media.setMuted(!call.muted)); }} />
-      <Button label={call.deafened ? "Undeafen" : "Deafen"} icon="headphones" iconOnly active={call.deafened} disabled={busy || call.phase !== "connected"}
+      <Button label={call.deafened ? "Undeafen" : "Deafen"} icon="headphones" iconOnly={compact} active={call.deafened} disabled={busy || call.phase !== "connected"}
         onClick={() => { void change(() => media.setDeafened(!call.deafened)); }} />
-      {!compact && <Button label={call.camera ? "Camera off" : "Camera on"} icon="camera" iconOnly active={call.camera} disabled={busy || call.phase !== "connected"}
+      {!compact && <Button label={call.camera ? "Camera off" : "Camera on"} icon="camera" iconOnly={compact} active={call.camera} disabled={busy || call.phase !== "connected"}
         onClick={() => { void change(() => media.setCamera(!call.camera)); }} />}
       {children}<span className="meeting-control-divider" />
-      <Button label="Leave room" icon="leave" iconOnly danger onClick={() => media.leave()} />
+      <Button label="Leave room" icon="leave" iconOnly={compact} danger onClick={() => media.leave()} />
     </div>;
   }
   function Sidebar({ children }: { children?: ReactRuntime.ReactNode }) {
@@ -260,7 +260,7 @@ export function apply(ctx: Context) {
         </aside>}
       </div>{chatOpen && <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />}</div>
       {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call}>
-        {call.sharing ? <Button label="Stop sharing" icon="screen" iconOnly active disabled={call.stopping} onClick={() => { void media.stopSharing(); }} /> : <Button label={call.picking ? "Choosing screen…" : "Share screen"} icon="screen" iconOnly disabled={!connected || call.picking || call.stopping} onClick={() => { void media.share(preset); }} />}
+        {call.sharing ? <Button label="Stop sharing" icon="screen" active disabled={call.stopping} onClick={() => { void media.stopSharing(); }} /> : <Button label={call.picking ? "Choosing screen…" : "Share screen"} icon="screen" disabled={!connected || call.picking || call.stopping} onClick={() => { void media.share(preset); }} />}
       </Controls><details className="meeting-quality"><summary aria-label="Stream options" title="Stream options"><Icon name="settings" /></summary><label className="text-caption">Share quality<select className="buzz-input" data-size="sm" value={preset} disabled={call.picking} onChange={event => setPreset(event.target.value as Preset)}>{Object.entries(presets).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label></details></footer>}
     </section>;
   }
