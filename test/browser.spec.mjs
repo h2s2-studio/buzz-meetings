@@ -443,6 +443,44 @@ test("keeps a workspace transcript recoverable after leaving and saves it to the
   await expect(ended).toHaveCount(0);
   expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual(["ended"]);
 });
+test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
+  test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
+  await proxyWorkspaceVoice(page);
+  await page.goto(`${fixture}?realm=same-name-${info.project.name}&viewer=Alex`);
+  await linkGeneral(page);
+  const view = workspace(page), callbar = view.getByRole("group", { name: "Meeting controls" });
+  await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  const quick = sidebar(page).getByRole("button", { name: "Join General Voice", exact: true });
+  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toBeVisible();
+  await expect(quick).not.toHaveAttribute("aria-current", "true");
+  await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  // Return from Messages lands on the workspace call, not the same-name quick room.
+  await page.getByRole("button", { name: "Messages", exact: true }).click();
+  await page.getByRole("toolbar", { name: "Buzz toolbar" }).getByRole("button", { name: "General Voice", exact: true }).click();
+  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Voice", exact: true })).toHaveAttribute("aria-pressed", "true");
+  // Renaming the quick shortcut never leaves the workspace call.
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("Lounge");
+  await expect(page.getByRole("button", { name: "Save channel name", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  await workspaces(page).getByRole("button", { name: "General Voice", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Lounge", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("General Voice");
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  // Selecting the quick room joins it instead of reusing the workspace connection.
+  const occurrence = await view.getByRole("group", { name: "Meeting controls" }).getAttribute("data-occurrence");
+  await quick.click();
+  await expect(controls(page).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  await expect(quick).toHaveAttribute("aria-current", "true");
+  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  await expect(controls(page)).not.toHaveAttribute("data-occurrence", occurrence);
+});
 test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
   const other = await context.newPage();
