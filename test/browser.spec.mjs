@@ -1,13 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { createServer } from "vite";
+import { writeFile } from "node:fs/promises";
 import { workspaceFixturePlugin } from "./workspace-http.mjs";
 import { identities, general, design } from "./workspace-host.mjs";
 test.use({ permissions: ["microphone", "camera"] });
 let site, fixture;
-const upstream = process.env.BUZZ_TEST_UPSTREAM_URL;
+const upstream = process.env.BUZZ_TEST_UPSTREAM_URL?.replace(/\/rooms\/?$/, "");
 test.beforeAll(async () => {
   site = await createServer({ configFile: false, plugins: [workspaceFixturePlugin()], server: { host: "127.0.0.1", port: 0, watch: null,
-    ...(upstream && { proxy: { "/rooms": { target: upstream, ws: true, headers: {
+    ...(upstream && { proxy: { "/rooms": { target: upstream, ws: true, changeOrigin: true, headers: {
       "X-Buzz-Streams-Proxy-Key": process.env.BUZZ_TEST_PROXY_KEY, Origin: "tauri://localhost" } } } }) } });
   await site.listen(); fixture = `http://127.0.0.1:${site.httpServer.address().port}/test/fixture.html`;
 });
@@ -534,7 +535,7 @@ test("transcribes a room without an agent or linked channel and preserves text a
   const common=timelines[0].find(row => timelines[1].some(other => other.id===row.id));
   expect(common).toBeTruthy(); expect(timelines[1].find(row=>row.id===common.id)).toEqual(common);
   expect(metrics[0].sources).toBe(2); expect(metrics[1].sources).toBe(2);
-  await test.info().attach("shared-speech-metrics",{body:JSON.stringify(metrics,null,2),contentType:"application/json"});
+  await writeFile(test.info().outputPath("speech-metrics.json"),JSON.stringify(metrics,null,2));
   for (const size of [{ width: 960, height: 720 }, { width: 530, height: 780 }]) {
     await page.setViewportSize(size);
     const box = await entries.boundingBox();

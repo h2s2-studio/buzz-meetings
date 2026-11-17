@@ -341,6 +341,21 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn media_api(base: &Url, action: &str) -> Option<Url> {
+    let mut api = base.clone();
+    let scheme = if api.scheme() == "wss" {
+        "https"
+    } else {
+        "http"
+    };
+    api.set_scheme(scheme).ok()?;
+    api.set_path(&format!(
+        "{}/twirp/livekit.RoomService/{action}",
+        base.path().trim_end_matches('/')
+    ));
+    Some(api)
+}
+
 // Reconstruct monitoring from the media server on every broker start. Admission-
 // local tasks alone would lose revocation coverage after a broker restart.
 pub(super) async fn guard(service: Arc<RoomService>) {
@@ -348,15 +363,6 @@ pub(super) async fn guard(service: Arc<RoomService>) {
     let Some(access) = &service.workspace_access else {
         return;
     };
-    let mut api = service.livekit_url.clone();
-    let scheme = if api.scheme() == "wss" {
-        "https"
-    } else {
-        "http"
-    };
-    if api.set_scheme(scheme).is_err() {
-        return;
-    }
     let token = |room: &str| {
         AccessToken::with_api_key(&service.api_key, &service.api_secret)
             .with_ttl(Duration::from_secs(60))
@@ -371,7 +377,7 @@ pub(super) async fn guard(service: Arc<RoomService>) {
     let mut failures = std::collections::HashMap::<String, u8>::new();
     loop {
         let cycle = async {
-            let list = api.join("/twirp/livekit.RoomService/ListRooms").ok()?;
+            let list = media_api(&service.livekit_url, "ListRooms")?;
             let rooms: Value = service
                 .http
                 .post(list)
@@ -387,7 +393,15 @@ pub(super) async fn guard(service: Arc<RoomService>) {
                 .await
                 .ok()?;
             let mut seen = std::collections::HashSet::new();
-            for room in rooms.get("rooms")?.as_array()? {
+            if rooms.get("rooms").is_some_and(|value| !value.is_array()) {
+                return None;
+            }
+            for room in rooms
+                .get("rooms")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 let Some(name) = room
                     .get("name")
                     .and_then(Value::as_str)
@@ -396,9 +410,7 @@ pub(super) async fn guard(service: Arc<RoomService>) {
                     continue;
                 };
                 let jwt = token(name).ok()?;
-                let endpoint = api
-                    .join("/twirp/livekit.RoomService/ListParticipants")
-                    .ok()?;
+                let endpoint = media_api(&service.livekit_url, "ListParticipants")?;
                 let people: Value = match service
                     .http
                     .post(endpoint)
@@ -470,9 +482,7 @@ pub(super) async fn guard(service: Arc<RoomService>) {
                             continue;
                         }
                     }
-                    let remove = api
-                        .join("/twirp/livekit.RoomService/RemoveParticipant")
-                        .ok()?;
+                    let remove = media_api(&service.livekit_url, "RemoveParticipant")?;
                     match service
                         .http
                         .post(remove)
@@ -750,11 +760,11 @@ mod tests {
         let removed = Arc::new(AtomicUsize::new(0));
         let attempts = removed.clone();
         let media = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", media.local_addr().unwrap());
+        let url = format!("ws://{}/streams", media.local_addr().unwrap());
         let media_app=Router::new()
-            .route("/twirp/livekit.RoomService/ListRooms",post(move || { let room=room_name.clone(); async move { Json(json!({"rooms":[{"name":room}]})) } }))
-            .route("/twirp/livekit.RoomService/ListParticipants",post(move || { let identity=identity.clone(); async move { Json(json!({"participants":[{"identity":identity,"metadata":json!({"channel":channel}).to_string()}]})) } }))
-            .route("/twirp/livekit.RoomService/RemoveParticipant",post(move || { let attempts=attempts.clone(); async move { if attempts.fetch_add(1,Ordering::SeqCst)==0 { axum::http::StatusCode::SERVICE_UNAVAILABLE } else { axum::http::StatusCode::OK } } }));
+            .route("/streams/twirp/livekit.RoomService/ListRooms",post(move || { let room=room_name.clone(); async move { Json(json!({"rooms":[{"name":room}]})) } }))
+            .route("/streams/twirp/livekit.RoomService/ListParticipants",post(move || { let identity=identity.clone(); async move { Json(json!({"participants":[{"identity":identity,"metadata":json!({"channel":channel}).to_string()}]})) } }))
+            .route("/streams/twirp/livekit.RoomService/RemoveParticipant",post(move || { let attempts=attempts.clone(); async move { if attempts.fetch_add(1,Ordering::SeqCst)==0 { axum::http::StatusCode::SERVICE_UNAVAILABLE } else { axum::http::StatusCode::OK } } }));
         let media_task = tokio::spawn(async move {
             axum::serve(media, media_app).await.unwrap();
         });
