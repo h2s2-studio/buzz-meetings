@@ -32,6 +32,9 @@ const MAX_HANDSHAKES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 2048;
 const MAX_AUDIO_MESSAGE_BYTES: usize = 440_000;
 const PROXY_KEY_HEADER: &str = "x-buzz-streams-proxy-key";
+const MAX_PARTICIPANTS: u32 = 13;
+const EMPTY_TIMEOUT: u32 = 120;
+const DEPARTURE_TIMEOUT: u32 = 20;
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -76,6 +79,10 @@ enum Reply<'a> {
         url: &'a str,
         token: String,
         room: String,
+        // The media server's room SID: one per call occurrence, shared by every
+        // attendee, replaced once the room empties past its departure timeout.
+        #[serde(rename = "occurrenceId", skip_serializing_if = "Option::is_none")]
+        occurrence_id: Option<String>,
         capabilities: Capabilities,
         #[serde(skip_serializing_if = "Option::is_none")]
         invite: Option<Invite>,
@@ -195,9 +202,9 @@ impl RoomService {
                 ..Default::default()
             })
             .with_room_config(RoomConfiguration {
-                max_participants: 13,
-                empty_timeout: 120,
-                departure_timeout: 20,
+                max_participants: MAX_PARTICIPANTS,
+                empty_timeout: EMPTY_TIMEOUT,
+                departure_timeout: DEPARTURE_TIMEOUT,
                 ..Default::default()
             })
             .to_jwt()
@@ -205,6 +212,46 @@ impl RoomService {
                 tracing::error!("could not sign media admission");
                 "Could not issue media admission."
             })
+    }
+
+    /// Open (or find) the media room and return its SID, the call occurrence.
+    /// CreateRoom is idempotent: an existing room keeps its SID. Admission does
+    /// not depend on it; clients confirm the SID from the room they joined.
+    pub(crate) async fn occurrence(&self, room: &str) -> Option<String> {
+        let jwt = AccessToken::with_api_key(&self.api_key, &self.api_secret)
+            .with_ttl(Duration::from_secs(60))
+            .with_grants(VideoGrants {
+                room: room.to_owned(),
+                room_create: true,
+                ..Default::default()
+            })
+            .to_jwt()
+            .ok()?;
+        let endpoint = workspaces::media_api(&self.livekit_url, "CreateRoom")?;
+        let value: serde_json::Value = self
+            .http
+            .post(endpoint)
+            .bearer_auth(jwt)
+            .json(&serde_json::json!({
+                "name": room,
+                "empty_timeout": EMPTY_TIMEOUT,
+                "departure_timeout": DEPARTURE_TIMEOUT,
+                "max_participants": MAX_PARTICIPANTS,
+            }))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        value
+            .get("sid")
+            .and_then(serde_json::Value::as_str)
+            .filter(|sid| valid_occurrence(sid))
+            .map(str::to_owned)
     }
 
     fn trusted_proxy(&self, headers: &HeaderMap) -> bool {
@@ -354,6 +401,7 @@ impl RoomService {
             url: self.livekit_url.as_str(),
             token,
             room: room_name,
+            occurrence_id: None,
             capabilities: Capabilities {
                 screen_audio: meeting,
                 transcription: meeting && self.transcription_url.is_some(),
@@ -362,6 +410,13 @@ impl RoomService {
             invite,
         })
     }
+}
+
+pub(crate) fn valid_occurrence(sid: &str) -> bool {
+    sid.len() <= 64
+        && sid.starts_with("RM_")
+        && sid.len() > 3
+        && sid[3..].chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn random_code() -> String {
@@ -430,10 +485,20 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
     let listening = request
         .as_ref()
         .is_ok_and(|request| matches!(request, Request::Listen { .. }));
-    let reply = request
+    let mut reply = request
         .map_err(|_| "Invalid room request.")
         .and_then(|request| rooms.admit(request, now.as_millis() as u64, trusted_proxy))
         .unwrap_or_else(|error| Reply::Error { error });
+    if !shared && !listening {
+        if let Reply::Admitted {
+            room,
+            occurrence_id,
+            ..
+        } = &mut reply
+        {
+            *occurrence_id = rooms.occurrence(room).await;
+        }
+    }
     if shared {
         match reply {
             Reply::Admitted { room, .. } => captions::serve(&mut socket, &rooms, &room, None).await,
@@ -814,5 +879,74 @@ mod tests {
                 .admit(request(), 0, service.trusted_proxy(&headers))
                 .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn admission_reports_the_media_room_occurrence_and_survives_its_absence() {
+        use axum::{routing::post, Json};
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_tungstenite::tungstenite::Message as Ws;
+        let created = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let failing = Arc::new(AtomicUsize::new(0));
+        let (seen, fail) = (created.clone(), failing.clone());
+        let media = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let media_url = format!("ws://{}", media.local_addr().unwrap());
+        let media_app = Router::new().route(
+            "/twirp/livekit.RoomService/CreateRoom",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let (seen, fail) = (seen.clone(), fail.clone());
+                async move {
+                    if fail.load(Ordering::SeqCst) > 0 {
+                        return Err(StatusCode::SERVICE_UNAVAILABLE);
+                    }
+                    seen.lock().unwrap().push(body);
+                    Ok(Json(
+                        serde_json::json!({"sid":"RM_Occurrence1","name":"ignored"}),
+                    ))
+                }
+            }),
+        );
+        let media_task = tokio::spawn(async move { axum::serve(media, media_app).await.unwrap() });
+        let service = RoomService::new(
+            Url::parse(&media_url).unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let broker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let broker_url = format!("ws://{}/rooms", broker.local_addr().unwrap());
+        let broker_task =
+            tokio::spawn(async move { axum::serve(broker, router(service)).await.unwrap() });
+        let admit = || async {
+            let (mut socket, _) = tokio_tungstenite::connect_async(&broker_url).await.unwrap();
+            socket
+                .send(Ws::Text(
+                    serde_json::json!({"type":"meeting","name":"Alex","community":"https://buzz.example/","room":"General Voice","key":"test-access"})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let Some(Ok(Ws::Text(text))) = socket.next().await else {
+                panic!("no admission")
+            };
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()
+        };
+        let first = admit().await;
+        assert_eq!(first["type"], "admitted");
+        assert_eq!(first["occurrenceId"], "RM_Occurrence1");
+        let body = created.lock().unwrap()[0].clone();
+        assert_eq!(body["name"], first["room"]);
+        assert_eq!(body["departure_timeout"], DEPARTURE_TIMEOUT);
+        failing.store(1, Ordering::SeqCst);
+        let degraded = admit().await;
+        assert_eq!(degraded["type"], "admitted");
+        assert!(degraded.get("occurrenceId").is_none());
+        assert!(
+            !valid_occurrence("RM_") && !valid_occurrence("XX_abc") && !valid_occurrence("RM_a\"b")
+        );
+        media_task.abort();
+        broker_task.abort();
     }
 }

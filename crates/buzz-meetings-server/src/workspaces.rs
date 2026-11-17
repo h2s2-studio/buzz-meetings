@@ -233,10 +233,12 @@ pub(super) async fn serve(
                 let identity = format!("{}-{}", viewer.to_hex(), random_code());
                 match service.media_token(&request.name, &room, &metadata, true, &identity) {
                     Ok(token) => {
+                        let occurrence_id = service.occurrence(&room).await;
                         let reply = Reply::Admitted {
                             url: service.livekit_url.as_str(),
                             token,
                             room,
+                            occurrence_id,
                             capabilities: service.capabilities(true),
                             invite: None,
                         };
@@ -341,7 +343,7 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn media_api(base: &Url, action: &str) -> Option<Url> {
+pub(crate) fn media_api(base: &Url, action: &str) -> Option<Url> {
     let mut api = base.clone();
     let scheme = if api.scheme() == "wss" {
         "https"

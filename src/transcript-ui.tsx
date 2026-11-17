@@ -14,7 +14,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const call = useSyncExternalStore(media.subscribe, media.snapshot);
     const scroll = useRef<HTMLDivElement>(null), following = useRef(true);
     const [announce,setAnnounce]=useState(announceByDefault), [announcement,setAnnouncement]=useState("");
-    const announced=useRef({callId:state.callId,cursor:state.base+state.segments.length});
+    const announced=useRef({joinId:state.joinId,cursor:state.base+state.segments.length});
     const [away, setAway] = useState(false), [search, setSearch] = useState(""), [notice, setNotice] = useState("");
     const saved = useSyncExternalStore(archive?.records.subscribe ?? (() => () => {}), archive?.records.snapshot ?? (() => undefined));
     const channelId = archive?.channel(roomName);
@@ -35,10 +35,10 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     }, [state.segments]);
     useEffect(() => {
       const cursor=state.base+state.segments.length;
-      if (!announce || !current || state.callId !== announced.current.callId || cursor < announced.current.cursor) setAnnouncement("");
+      if (!announce || !current || state.joinId !== announced.current.joinId || cursor < announced.current.cursor) setAnnouncement("");
       else if (cursor > announced.current.cursor) setAnnouncement(state.segments.slice(Math.max(0,announced.current.cursor-state.base)).map(row=>`${speaker(row)}: ${row.text}`).join(" ").slice(0,2000));
-      announced.current={callId:state.callId,cursor};
-    },[state.segments,state.callId,current,announce]);
+      announced.current={joinId:state.joinId,cursor};
+    },[state.segments,state.joinId,current,announce]);
     function latest() {
       following.current = true; setAway(false);
       if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -50,7 +50,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
       {current && state.warning && <p role="status" className="meeting-transcript-notice text-subtle">{state.warning}</p>}
       {notice && <p className="meeting-transcript-notice text-caption">{notice}</p>}
       {saved?.error && <p role="alert" className="meeting-transcript-notice text-danger">{saved.error}</p>}
-      {saved?.saved && saved.records.some(record => record.id === saved.saved && record.value.callId === (state.sharedCallId ?? state.callId)) && <p className="meeting-transcript-notice text-caption">Saved in this workspace’s Meeting records.</p>}
+      {saved?.saved && saved.records.some(record => record.id === saved.saved && record.value.callId === (state.occurrenceId ?? state.sharedCallId)) && <p className="meeting-transcript-notice text-caption">Saved in this workspace’s Meeting records.</p>}
       {saved?.pending && archive && <button type="button" className="buzz-button" data-buzz-ui="" disabled={saved.busy} onClick={() => { void archive.records.retry(); }}>Check / retry saved meeting</button>}
       {current && state.error && <p role="alert" className="meeting-transcript-notice text-danger">{state.error}</p>}
       <div className="meeting-transcript-scroll" ref={scroll} role="region" aria-label="Transcript entries" tabIndex={0} onScroll={() => {

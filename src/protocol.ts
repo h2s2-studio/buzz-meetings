@@ -13,12 +13,17 @@ export type VoiceRequest = Extract<RoomRequest, { type: "meeting" | "workspace" 
 export const isVoice = (request: RoomRequest): request is VoiceRequest => request.type === "meeting" || request.type === "workspace";
 export type RoomAdmission = {
   room?: string;
+  /** Media room SID reported by the broker: the call occurrence. */
+  occurrenceId?: string;
   type: "admitted";
   url: string;
   token: string;
   capabilities?: { screenAudio: boolean; transcription?: boolean; sharedTranscription?: boolean };
   invite?: { code: string; expiresAt: number };
 };
+// LiveKit room SIDs identify one call occurrence. Validate before keying on one.
+export const occurrencePattern = /^RM_[A-Za-z0-9]{1,61}$/;
+export const validOccurrence = (value: unknown): value is string => typeof value === "string" && occurrencePattern.test(value);
 export type RoomReply = RoomAdmission | { type: "error"; error: string };
 
 export function roomServiceError(type: RoomRequest["type"], error: string): string {

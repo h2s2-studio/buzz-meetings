@@ -385,6 +385,24 @@ test("joins voice in one click, hears peers, mutes, watches simultaneous screens
   await expect(page.locator("audio[data-meeting-audio]")).toHaveCount(0);
 });
 
+test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }) => {
+  test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
+  const other = await context.newPage();
+  await Promise.all([page.goto(`${fixture}?viewer=Alex`), other.goto(`${fixture}?viewer=Riley`)]);
+  const occurrence = async client => { await expect(controls(client)).toHaveAttribute("data-occurrence", /^RM_[A-Za-z0-9]+$/, { timeout: 15000 }); return controls(client).getAttribute("data-occurrence"); };
+  const connect = async client => { await join(client).click(); await expect(controls(client).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 }); return occurrence(client); };
+  const leave = async client => { await controls(client).getByRole("button", { name: "Leave room", exact: true }).click(); await expect(join(client)).toBeVisible(); };
+  const first = await connect(page);
+  expect(await connect(other)).toBe(first);
+  await leave(other);
+  expect(await connect(other)).toBe(first);
+  await leave(page); await leave(other);
+  // LiveKit keeps an emptied room for its 20 s departure timeout, then closes it.
+  await page.waitForTimeout(25000);
+  const next = await connect(page);
+  expect(next).not.toBe(first);
+  expect(await connect(other)).toBe(next);
+});
 test("keeps icon controls reachable and sharing choices explicit across pane sizes and navigation", async ({ page }) => {
   test.skip(!upstream, "Run npm run test:media to exercise call controls");
   await page.goto(`${fixture}?realm=ux-drawer`); await join(page).click();

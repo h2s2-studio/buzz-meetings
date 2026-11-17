@@ -5,7 +5,10 @@ import type { makeRoomSession } from "./room";
 
 export type MeetingTranscriptState = {
   phase: "idle" | "starting" | "transcribing" | "reconnecting" | "paused" | "ended" | "error";
-  callId?: string;
+  /** Local join this transcript belongs to (UI lifecycle). */
+  joinId?: string;
+  /** Call occurrence (media room SID) the transcript was captured in. */
+  occurrenceId?: string;
   roomName?: string;
   error: string;
   segments: readonly TranscriptSegment[];
@@ -18,7 +21,7 @@ export type MeetingTranscriptState = {
 };
 type Media = Pick<ReturnType<typeof makeRoomSession>, "snapshot" | "subscribe" | "transcribe" | "captions" | "setTranscribing">;
 type Run = {
-  callId: string;
+  joinId: string;
   abort: AbortController;
   context?: AudioContext;
   socket?: { close(): void; send?(chunk: SpeechChunk): void };
@@ -40,31 +43,31 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     if (run) {
       run.abort.abort(); run.recorder?.close(); run.socket?.close();
       void run.context?.close().catch(() => {});
-      void media.setTranscribing(run.callId, false).catch(() => {});
+      void media.setTranscribing(run.joinId, false).catch(() => {});
     }
     emit({ phase: error ? "error" : phase, error });
   }
   function reset() {
     stop();
-    emit({ phase: "idle", callId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
+    emit({ phase: "idle", joinId: undefined, occurrenceId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
   }
   function start() {
     const call = media.snapshot();
-    if (active && active.callId === call.sessionId) return active.ready ?? Promise.resolve();
-    if (call.phase !== "connected" || !call.sessionId || !call.transcription) {
+    if (active && active.joinId === call.joinId) return active.ready ?? Promise.resolve();
+    if (call.phase !== "connected" || !call.joinId || !call.transcription) {
       emit({ error: call.phase !== "connected" ? "Join a voice room to start transcription." : "Transcription isn’t available on this meeting service." });
       return Promise.resolve();
     }
     stop();
     let context: AudioContext | undefined;
     try { if (!call.sharedTranscription) context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
-    const run: Run = { callId: call.sessionId, abort: new AbortController(), context };
+    const run: Run = { joinId: call.joinId, abort: new AbortController(), context };
     active = run;
-    emit({ phase: "starting", callId: call.sessionId, roomName: call.roomName, error: "", ...(state.callId !== call.sessionId ? { segments: [] } : {}) });
+    emit({ phase: "starting", joinId: call.joinId, occurrenceId: call.occurrenceId, roomName: call.roomName, error: "", ...(state.joinId !== call.joinId ? { segments: [] } : {}) });
     run.ready = (async () => {
       try {
         if (call.sharedTranscription) {
-          await media.setTranscribing(run.callId,true);
+          await media.setTranscribing(run.joinId,true);
           if (active !== run) return;
           run.socket = await media.captions(run.abort.signal, packet => {
             if (active !== run) return;
@@ -95,7 +98,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
         await untilCanceled(resumed, AbortSignal.any([run.abort.signal, AbortSignal.timeout(8000)]));
         if (active !== run) { run.socket.close(); return; }
         if (context.state !== "running") throw new Error("Audio capture paused. Start transcription again from this meeting.");
-        await media.setTranscribing(run.callId, true);
+        await media.setTranscribing(run.joinId, true);
         if (active !== run) return;
         run.recorder = captureSpeakers(context, chunk => { if (active === run) run.socket?.send?.(chunk); });
         run.recorder.update(media.snapshot().participants);
@@ -108,15 +111,15 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
   }
   const unsubscribe = media.subscribe(() => {
     const call = media.snapshot();
-    if (call.sessionId && call.sessionId !== state.callId) {
-      reset(); emit({ callId: call.sessionId, roomName: call.roomName });
-    }
+    if (call.joinId && call.joinId !== state.joinId) {
+      reset(); emit({ joinId: call.joinId, occurrenceId: call.occurrenceId, roomName: call.roomName });
+    } else if (call.joinId && call.occurrenceId && call.occurrenceId !== state.occurrenceId) emit({ occurrenceId: call.occurrenceId });
     const run = active;
     if (!run) {
-      if (call.phase === "idle" && state.callId && state.phase !== "ended") emit({ phase: "ended" });
+      if (call.phase === "idle" && state.joinId && state.phase !== "ended") emit({ phase: "ended" });
       return;
     }
-    if (call.phase === "idle" || call.sessionId !== run.callId) return stop("", "ended");
+    if (call.phase === "idle" || call.joinId !== run.joinId) return stop("", "ended");
     run.recorder?.update(call.phase === "connected" ? call.participants : []);
     if (run.recorder) {
       const phase = call.phase === "connected" ? "transcribing" : "reconnecting";

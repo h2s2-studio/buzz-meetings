@@ -91,7 +91,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
       }
       await flush();
       const recordId = crypto.randomUUID();
-      const record: SavedRecord = { version:1,callId:transcript.sharedCallId ?? transcript.callId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.channelId === channelId ? agents.tasks.map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId })) : [] };
+      const record: SavedRecord = { version:1,callId:transcript.occurrenceId ?? transcript.sharedCallId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.channelId === channelId ? agents.tasks.map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId })) : [] };
       await sign(recordId,recordType,JSON.stringify(record)); requireAccess(scope,channelId,true);
       const intent: Intent = { channelId,events,recordId };
       await store.preferences.update("pending", value => { if (value) throw new Error("Another save is awaiting confirmation."); return JSON.parse(JSON.stringify(intent)); });

@@ -297,7 +297,7 @@ export function apply(ctx: Context) {
     const [busy, setBusy] = useState(false);
     async function change(action: () => Promise<void>) { setBusy(true); try { await action(); } finally { setBusy(false); } }
     if (call.phase === "idle") return null;
-    return <div className="meeting-callbar" role="group" aria-label="Meeting controls" data-compact={compact || undefined}>
+    return <div className="meeting-callbar" role="group" aria-label="Meeting controls" data-compact={compact || undefined} data-occurrence={call.occurrenceId}>
       <span className="sr-only" role="status">{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
       <Button label={call.muted ? "Unmute" : "Mute"} icon={call.muted ? "microphoneOff" : "microphone"} iconOnly active={call.muted} disabled={busy || call.phase !== "connected" || call.deafened} onClick={() => { void change(() => media.setMuted(!call.muted)); }} />
       <audio.AudioSettings />
