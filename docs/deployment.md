@@ -84,7 +84,7 @@ loopback WebSockets. Use trusted WSS when testing inside stock Buzz Desktop.
 ## Install the app after deployment
 
 In Buzz, add `https://github.com/h2s2-studio/buzz-meetings` as a Git plugin.
-Open Meetings, expand Connection settings if using a separate hostname, and
+Open Meetings, open Connection settings from the room header if using a separate hostname, and
 enter `wss://meetings.example.org/rooms` plus the meeting access key. Click
 General Voice on two devices. Verify speech both ways, mute/deafen, camera,
 screen source changes, simultaneous screen playback, and leaving.

@@ -21,11 +21,11 @@ admission server and LiveKit for voice and video.
 
 Your community must run the [Meetings deployment](docs/deployment.md). By default,
 the app uses the community’s `/rooms` endpoint. For a separate service, open
-**Connection settings** and enter its `wss://…/rooms` address and access key.
+the room header’s **Connection settings** button and enter its `wss://…/rooms` address and access key.
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.1.0` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.1.1` for this release, or leave it
 empty to follow main and use **Check for updates**.
 
 ## In a room
