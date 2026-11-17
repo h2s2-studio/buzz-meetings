@@ -5,8 +5,8 @@ const built = await build({ entryPoints:["src/meeting-records.ts"],bundle:true,f
 const { meetingRecords } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 import { WorkspaceHost, client, general } from "./workspace-host.mjs";
 const relay = connection => ({ snapshot:connection.current,subscribe:connection.session.channels.subscribeList });
-const transcript = { roomName:"General Voice", warning:"", base:0, segments:Array.from({length:40},(_,i) => ({ startedAt:Date.now()+i, speakerName:i%2 ? "Riley" : "Alex", text:"Agreed task. ".repeat(200) })) };
-const agents = { channelId:general,tasks:[{ title:"Research", status:"done", result:"Notes saved", messageId:"e".repeat(64) }] };
+const transcript = { occurrenceId:"RM_call", roomName:"General Voice", warning:"", base:0, segments:Array.from({length:40},(_,i) => ({ startedAt:Date.now()+i, speakerName:i%2 ? "Riley" : "Alex", text:"Agreed task. ".repeat(200) })) };
+const agents = { tasksFor:(channelId,occurrenceId) => channelId === general && occurrenceId === "RM_call" ? [{ title:"Research", status:"done", result:"Notes saved", messageId:"e".repeat(64) }] : [] };
 const settle = () => new Promise(resolve => setTimeout(resolve,0));
 test("meeting snapshots survive restart, chunk full text, and bind exact saved revisions",async () => {
   const host = new WorkspaceHost(), connection = client(host), records = meetingRecords(relay(connection),connection.storage);

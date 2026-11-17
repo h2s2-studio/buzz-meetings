@@ -1,6 +1,6 @@
 import { readable, writable, uuid, type Collection, type Entry, type Event, type Storage, type Template, type WorkspaceConnection } from "./workspaces";
 import type { MeetingTranscriptState } from "./meeting-transcription";
-import type { LiveAgentState } from "./live-agents";
+type TaskSource = { tasksFor(channelId: string, occurrenceId?: string): readonly { title: string; status: string; result: string; messageId?: string }[] };
 export const recordType = "studio.h2s2.meetings.record";
 type SavedRecord = { version: 1; callId?: string; streamId?: string; title: string; channelId: string; capturedAt: number; warning: string; parts: { id: string; revision: string }[]; tasks: { title: string; status: string; result: string; messageId?: string }[] };
 type Intent = { channelId: string; events: Event[]; recordId: string };
@@ -72,7 +72,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
   });
   return {
     snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    save: (channelId: string, transcript: MeetingTranscriptState, agents: LiveAgentState) => run(async (scope,signal,store) => {
+    save: (channelId: string, transcript: MeetingTranscriptState, agents: TaskSource) => run(async (scope,signal,store) => {
       requireAccess(scope,channelId,true);
       if (await store.preferences.get("pending")) throw new Error("Finish the previous saved meeting operation first.");
       if (!transcript.segments.length || !scope.session.configArtifactWriter?.kinds?.includes(45010)) throw new Error("There is no transcript to save, or this Buzz version cannot save records.");
@@ -91,7 +91,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
       }
       await flush();
       const recordId = crypto.randomUUID();
-      const record: SavedRecord = { version:1,callId:transcript.occurrenceId ?? transcript.sharedCallId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.channelId === channelId ? agents.tasks.map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId })) : [] };
+      const record: SavedRecord = { version:1,callId:transcript.occurrenceId ?? transcript.sharedCallId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.tasksFor(channelId, transcript.occurrenceId).map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId })) };
       await sign(recordId,recordType,JSON.stringify(record)); requireAccess(scope,channelId,true);
       const intent: Intent = { channelId,events,recordId };
       await store.preferences.update("pending", value => { if (value) throw new Error("Another save is awaiting confirmation."); return JSON.parse(JSON.stringify(intent)); });

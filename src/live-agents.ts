@@ -16,14 +16,20 @@ export type AgentRuntime = {
 type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string };
 type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; joinId: string; occurrenceId?: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
 export type CallAgent = { pubkey: string; name: string; channelId: string; sessionId: string; phase: "starting" | "listening" };
-export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
+export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; occurrenceId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
 export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; effect(setup: () => () => void): void }, media: ReturnType<typeof makeRoomSession>, transcript: MeetingTranscription) {
   const listeners = new Set<() => void>(), sessions = new Map<string, Session>();
   const active = new Map<string, Session>();
   let state: LiveAgentState = { phase: "idle", error: "", transcripts: [], tasks: [], consumed: 0, notified: 0 };
+  // Tasks belong to one channel and call occurrence, never to whichever agent ran last.
+  function tasksFor(channelId: string, occurrenceId?: string): Task[] {
+    if (!occurrenceId) return [];
+    return [...sessions.values()].filter(run => run.channelId === channelId && run.occurrenceId === occurrenceId).flatMap(run => run.tasks.map(task => ({ ...task })));
+  }
   function emit(next: Partial<LiveAgentState> = {}) {
     const runs = [...active.values()], last = runs.at(-1), recent = last ?? [...sessions.values()].at(-1);
-    state = { ...state, phase: runs.some(run => run.phase === "starting") ? "starting" : runs.length ? "listening" : "idle", members: runs.map(run => ({ pubkey: run.agent.pubkey, name: run.agent.name, channelId: run.channelId, sessionId: run.id, phase: run.phase })), ...(recent ? { sessionId: recent.id, channelId: recent.channelId, agentName: recent.agent.name, transcripts: [...recent.transcripts], tasks: [...sessions.values()].filter(run => run.joinId === recent.joinId).flatMap(run => run.tasks.map(task => ({ ...task }))), consumed: recent.consumed, notified: recent.notified } : {}), ...next };
+    const call = media.snapshot(), occurrence = call.phase === "idle" ? recent?.occurrenceId : call.occurrenceId;
+    state = { ...state, phase: runs.some(run => run.phase === "starting") ? "starting" : runs.length ? "listening" : "idle", members: runs.map(run => ({ pubkey: run.agent.pubkey, name: run.agent.name, channelId: run.channelId, sessionId: run.id, phase: run.phase })), ...(recent ? { sessionId: recent.id, channelId: recent.channelId, occurrenceId: occurrence, agentName: recent.agent.name, transcripts: [...recent.transcripts], tasks: tasksFor(recent.channelId, occurrence), consumed: recent.consumed, notified: recent.notified } : {}), ...next };
     for (const listener of listeners) listener();
   }
   function allowed(run: Session, write = false) {
@@ -113,8 +119,10 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
   }
   ctx.effect(() => {
     const stopRuntime=ctx.agents?.subscribe(()=>emit());
+    let occurrence = media.snapshot().occurrenceId;
     const stopMedia = media.subscribe(() => {
       const call = media.snapshot();
+      if (call.occurrenceId !== occurrence && (call.occurrenceId || call.phase === "idle")) { occurrence = call.occurrenceId; emit(); }
       for (const run of [...active.values()]) {
         if (call.joinId !== run.joinId || call.phase === "idle") stop("", run.agent.pubkey);
         else if (!allowed(run)) stop("Listening stopped because channel access changed.", run.agent.pubkey);
@@ -165,6 +173,6 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     const runtime = ctx.agents?.snapshot(), owner = ctx.relay.snapshot().viewer;
     return !!runtime?.agents.some(agent => agent.pubkey === pubkey && agent.owner === owner && agent.place === "here" && runtime.running.some(running => running.key === agent.key));
   }
-  return { eligible, start, stop, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { eligible, start, stop, tasksFor, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 export type LiveAgents = ReturnType<typeof makeLiveAgents>;
