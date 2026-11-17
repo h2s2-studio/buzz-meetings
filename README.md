@@ -25,7 +25,7 @@ the room header’s **Connection settings** button and enter its `wss://…/room
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.1.1` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.1.2` for this release, or leave it
 empty to follow main and use **Check for updates**.
 
 ## In a room
@@ -43,8 +43,12 @@ empty to follow main and use **Check for updates**.
   A uniquely matching joined channel is linked automatically; otherwise choose
   a channel or explicitly create an open one. Chat remains available when voice
   is disconnected.
-- Add named rooms with the sidebar’s **+**. Room names are saved on this device;
-  others add the same name to join the same room on the same community/service.
+- Add named rooms with the sidebar’s **+**, or open **Manage voice channels**
+  beside it to create, rename, and remove shortcuts. Room names are saved on this
+  device; others add the same name to join the same room on the same community/service.
+  Removing a shortcut preserves its text conversation and other participants.
+  Renaming to a different room ends your current call and keeps the linked chat.
+  You can remove General Voice or clear the list without it returning after reload.
 
 ## Release boundaries
 

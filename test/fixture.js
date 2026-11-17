@@ -6,7 +6,8 @@ const viewer = query.get("viewer") || "Alex";
 const origin = query.get("relay") || location.origin;
 let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer,
   session: { profiles: { snapshot: () => new Map([[viewer, { name: viewer, picture: "https://example.com/avatar.png" }]]), subscribe: () => () => {} }, media: () => undefined } };
-let page, panel, settings, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
+const settings = new Map();
+let page, panel, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
 let releaseMicrophone;
 let navigation;
 let chatChannels = ["General Voice", "Design"].map((name, index) => ({ id: `chat-${index}`, name, channelType: "stream", members: [viewer] }));
@@ -74,8 +75,8 @@ apply({ react: React,
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
   pages: { register(entry) { page = entry; } }, panels: { register(entry) { panel = entry; } },
-  settingsCards: { register(entry) { settings = entry; } },
-  navigation: { async open(target) { navigation?.(target.kind === "settings" ? "settings" : true); return { status: "opened" }; } },
+  settingsCards: { register(entry) { settings.set(entry.id, entry); } },
+  navigation: { async open(target) { navigation?.(target.kind === "settings" ? target.section : true); return { status: "opened" }; } },
   effect(setup) { cleanups.push(setup()); },
 });
 window.meetingTest = {
@@ -90,13 +91,14 @@ window.meetingTest = {
 window.addEventListener("pagehide", () => { window.meetingTest.disable(); for (const audio of contexts) void audio.close(); }, { once: true });
 function Fixture() {
   const [open, setOpen] = React.useState(true); navigation = setOpen;
+  const card = typeof open === "string" ? settings.get(open.split("/").at(-1)) : undefined;
   return React.createElement(React.Fragment, null,
     React.createElement("header", { className: "fixture-topbar" },
       React.createElement("div", { className: "fixture-brand text-body-sm" }, "Buzz", React.createElement("span", { className: "text-metadata" }, " / "), "Meetings"),
       React.createElement("button", { className: "buzz-button", "data-buzz-ui": "", "data-variant": "ghost", "data-size": "sm", onClick: () => setOpen(open === true ? false : true) }, React.createElement("span", { className: "buzz-button-label" }, open === true ? "Messages" : "Meetings")),
       React.createElement("div", { role: "toolbar", "aria-label": "Buzz toolbar" }, React.createElement(panel.toolbar))),
-    open === "settings" ? React.createElement("div", { className: "fixture-settings" }, React.createElement("h2", { className: "text-heading" }, "Meetings"), React.createElement(settings.component))
-      : open ? React.createElement("div", { className: "fixture-layout" }, React.createElement(page.sidebar), React.createElement("div", { className: "fixture-main" }, React.createElement(page.component)))
+    card ? React.createElement("div", { className: "fixture-settings" }, React.createElement("h2", { className: "text-heading" }, card.title), React.createElement(card.component))
+      : open ? React.createElement("div", { className: "fixture-layout" }, React.createElement(page.sidebar, null, React.createElement("nav", { className: "fixture-pages", style: { flex: 1, height: "100%" } }, React.createElement("button", { className: "navigation-item", "data-buzz-ui": "", "data-variant": "row" }, "Activity"))), React.createElement("div", { className: "fixture-main" }, React.createElement(page.component)))
       : React.createElement("p", null, "Messages stay available during your meeting."));
 }
 createRoot(document.querySelector("#app")).render(React.createElement(Fixture));

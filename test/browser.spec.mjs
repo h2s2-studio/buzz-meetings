@@ -32,6 +32,41 @@ test("automatically presents rooms, persists names, and reports denied microphon
   await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
   expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual([]);
 });
+test("top-aligns rooms below host navigation and persists create, rename, and removal", async ({ page }) => {
+  await page.setViewportSize({ width: 530, height: 2064 });
+  await page.goto(`${fixture}?deny`);
+  const activity = await page.getByRole("button", { name: "Activity", exact: true }).boundingBox();
+  const heading = await sidebar(page).getByRole("heading", { name: "Voice Channels" }).boundingBox();
+  expect(heading.y).toBeLessThan(activity.y + activity.height + 64);
+  expect(heading.y).toBeLessThan(200);
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByLabel("Channel name", { exact: true }).fill("Design Room");
+  await page.getByRole("button", { name: "Create voice channel", exact: true }).click();
+  await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("Lounge");
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Rename Lounge", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Rename Lounge", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("Design Room");
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("already in your list");
+  await page.getByRole("button", { name: "Cancel rename", exact: true }).click();
+  if (test.info().project.name === "chromium") { await page.setViewportSize({ width: 1280, height: 787 }); await page.screenshot({ path: "docs/screenshots/meetings-manage.png" }); }
+  await page.getByRole("button", { name: "Remove Lounge", exact: true }).click();
+  await page.getByRole("button", { name: "Remove channel shortcut", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  await expect(sidebar(page).getByRole("button", { name: "Join Lounge", exact: true })).toHaveCount(0);
+  await expect(sidebar(page).getByRole("button", { name: "Join Design Room", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(join(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByRole("button", { name: "Remove Design Room", exact: true }).click();
+  await page.getByRole("button", { name: "Remove channel shortcut", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  await expect(page.getByText("Create a voice channel to start a conversation.")).toBeVisible();
+  await page.reload();
+  await expect(join(page)).toHaveCount(0);
+});
 test("keeps the native room conversation available after failed voice and isolates room destinations", async ({ page }) => {
   await page.goto(`${fixture}?deny`);
   const conversation = page.getByRole("region", { name: "Native conversation" });
