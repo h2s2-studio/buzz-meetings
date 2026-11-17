@@ -2,6 +2,11 @@
 
 This bundle contains the LiveKit JavaScript Client SDK and its dependencies.
 
+The agent mark adapts Buzz RobotArtwork from block/buzz-app, revision
+a1c9c96940d2a6c81fce9beed9b7cbcc34b144b8, under Apache-2.0 (reproduced below).
+Chat and settings glyphs use the same MIT-licensed Tabler 3.46.0 geometry as Buzz;
+the Tabler notice is included below.
+
 The LiveKit Protocol and Client SDK use Apache-2.0. Buf Technologies’ @bufbuild/protobuf is also distributed under Apache-2.0, reproduced below.
 
 ---

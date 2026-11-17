@@ -1,6 +1,7 @@
 import type { LiveAgents, LiveAgentState } from "./live-agents";
 import type { makeRoomSession, RoomSnapshot } from "./room";
 import type * as ReactRuntime from "react";
+import { agentIcon } from "./agent-icon";
 import { readable, writable, type WorkspaceConnection } from "./workspaces";
 
 // Public session-owned capabilities. Identity choices are not execution or access proof.
@@ -31,6 +32,7 @@ const templates = {
 
 export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; navigation: { open(target: ConversationTarget): Promise<unknown> } }, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>) {
   const React = ctx.react;
+  const AgentIcon=agentIcon(React);
   const { useEffect, useState, useSyncExternalStore } = React;
   const drafts = new WeakMap<object, Map<string, { selected: string; draft: string; kind: keyof typeof templates; liveMode: "act" | "assist"; mission: string }>>();
   function Action(props: ReactRuntime.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -105,7 +107,7 @@ export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapsh
       <header><h3 className="text-body-sm">Agents in this call</h3><Action disabled={!access} onClick={() => open("members")}>Manage access</Action></header>
       {!access ? <p role="status">Reconnect and choose a channel you belong to to work with its agents.</p> : <>
         {(listening.members ?? []).filter(item => item.channelId === channelId).map(item => <div className="meeting-agent-member" key={item.pubkey}>
-          <span className="meeting-agent-symbol" aria-hidden="true">✦</span><div><strong>{item.name}</strong><p className="text-caption text-subtle" role="status">{item.phase === "starting" ? "Joining…" : "Listening · ready for spoken tasks"}</p></div>
+          <span className="meeting-agent-symbol" aria-hidden="true"><AgentIcon /></span><div><strong>{item.name}</strong><p className="text-caption text-subtle" role="status">{item.phase === "starting" ? "Joining…" : "Listening · ready for spoken tasks"}</p></div>
           <Action aria-label={`Remove ${item.name} from call`} onClick={() => liveAgents?.stop("", item.pubkey)}>Remove</Action>
         </div>)}
         {listening.error && <p role="alert" className="text-danger">{listening.error}</p>}

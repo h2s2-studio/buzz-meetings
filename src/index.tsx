@@ -10,6 +10,7 @@ import { presets, type Preset } from "./capture";
 import { audioSettings } from "./audio-settings";
 import { cameraPermissions } from "./permissions";
 import { speakerLabels } from "./speaker-labels";
+import { agentIcon } from "./agent-icon";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
 import { readable, type Channel } from "./workspaces";
@@ -52,13 +53,13 @@ const glyphs = {
   camera: "M3 5h12v14H3zm12 5 6-4v12l-6-4z",
   leave: "M5 4h4l2 5l-2.5 1.5a11 11 0 0 0 5 5l1.5 -2.5l5 2v4a2 2 0 0 1 -2 2c-8.072 -.49 -14.51 -6.928 -15 -15a2 2 0 0 1 2 -2 M17 3l4 4 M21 3l-4 4",
   plus: "M12 5v14M5 12h14", expand: "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5",
-  settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z",
-  chat: "M4 4h16v12H9l-5 4z",
+  settings: "M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065 M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0",
+  chat: "M3 20l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c3.255 2.777 3.695 7.266 1.029 10.501c-2.666 3.235 -7.615 4.215 -11.574 2.293l-4.7 1",
   transcript: "M4 5h16v14H4z M7 9h4 M7 13h4 M14 9h3 M14 13h3",
-  agent: "M7 7h10a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3H7a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3 M12 3v4 M9 12v1 M15 12v1 M9 17h6",
   remove: "M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6",
   meetings: "M5 3h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8l-5 3V5a2 2 0 0 1 2-2ZM8 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm8 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM5.5 15a2.5 2.5 0 0 1 5 0m3 0a2.5 2.5 0 0 1 5 0",
 } as const;
+type IconName = keyof typeof glyphs | "agent";
 const validName = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ");
 const roomKey = (value: string) => validName(value).toLocaleLowerCase("en-US");
 function readRooms(key: string) {
@@ -189,12 +190,14 @@ export function apply(ctx: Context) {
     });
     return () => { stop(); media.leave(); style.remove(); };
   });
-  function Icon({ name }: { name: keyof typeof glyphs }) {
-    return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+  const AgentIcon=agentIcon(React);
+  function Icon({ name }: { name: IconName }) {
+    if(name === "agent") return <AgentIcon />;
+    return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={glyphs[name]} /></svg>;
   }
   function Button({ label, icon, active, danger, iconOnly = false, variant = "subtle", ...props }: ReactRuntime.ComponentProps<"button"> & {
-    label: string; icon?: keyof typeof glyphs; active?: boolean; danger?: boolean; iconOnly?: boolean; variant?: "ghost" | "subtle" | "prominent";
+    label: string; icon?: IconName; active?: boolean; danger?: boolean; iconOnly?: boolean; variant?: "ghost" | "subtle" | "prominent";
   }) {
     return <button {...props} type="button" className="buzz-button meeting-control" data-buzz-ui="" data-size="sm"
       aria-label={label} title={label} aria-pressed={active} data-disabled={props.disabled || undefined}
