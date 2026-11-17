@@ -84,7 +84,7 @@ export function apply(ctx: Context) {
   const Records = recordsUI(React, records);
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
   ctx.effect(() => () => { transcript.close(); records.close(); });
-  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records });
+  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records });
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
   const storageKey = () => `studio.h2s2.meeting:${connection.scope || connection.origin}:${connection.viewer}:rooms`;

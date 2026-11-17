@@ -9,6 +9,8 @@ export type MeetingTranscriptState = {
   joinId?: string;
   /** Call occurrence (media room SID) the transcript was captured in. */
   occurrenceId?: string;
+  /** Workspace channel the call belonged to; a saved record binds to it, not to a room name. */
+  channelId?: string;
   roomName?: string;
   error: string;
   segments: readonly TranscriptSegment[];
@@ -49,7 +51,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
   }
   function reset() {
     stop();
-    emit({ phase: "idle", joinId: undefined, occurrenceId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
+    emit({ phase: "idle", joinId: undefined, occurrenceId: undefined, channelId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
   }
   function start() {
     const call = media.snapshot();
@@ -63,7 +65,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     try { if (!call.sharedTranscription) context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
     const run: Run = { joinId: call.joinId, abort: new AbortController(), context };
     active = run;
-    emit({ phase: "starting", joinId: call.joinId, occurrenceId: call.occurrenceId, roomName: call.roomName, error: "", ...(state.joinId !== call.joinId ? { segments: [] } : {}) });
+    emit({ phase: "starting", joinId: call.joinId, occurrenceId: call.occurrenceId, channelId: call.workspaceChannelId, roomName: call.roomName, error: "", ...(state.joinId !== call.joinId ? { segments: [] } : {}) });
     run.ready = (async () => {
       try {
         if (call.sharedTranscription) {
@@ -113,7 +115,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
   const unsubscribe = media.subscribe(() => {
     const call = media.snapshot();
     if (call.joinId && call.joinId !== state.joinId) {
-      reset(); emit({ joinId: call.joinId, occurrenceId: call.occurrenceId, roomName: call.roomName });
+      reset(); emit({ joinId: call.joinId, occurrenceId: call.occurrenceId, channelId: call.workspaceChannelId, roomName: call.roomName });
     } else if (call.joinId && call.occurrenceId && call.occurrenceId !== state.occurrenceId) emit({ occurrenceId: call.occurrenceId });
     const run = active;
     if (!run) {

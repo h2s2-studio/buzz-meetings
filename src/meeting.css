@@ -94,6 +94,9 @@
 .meeting-workspace-surface { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .meeting-workspace-surface > * { flex: 1; min-height: 0; }
 .meeting-workspace-unavailable { padding: var(--space-panel-inset); }
+.meeting-ended-call { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-panel-inset); border-bottom: 1px solid var(--border-standard); background: var(--affordance-subtle); }
+.meeting-ended-call p { margin: 0; }
+.meeting-ended-call-actions { display: flex; gap: var(--space-2); }
 .meeting-workspace-footnote { margin: 0; padding: var(--space-2) var(--space-panel-inset); border-top: 1px solid var(--border-standard); }
 .meeting-workspace-callbar { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; border-top: 1px solid var(--border-standard); padding: var(--space-3); }
 .meeting-workspace-link { padding: var(--space-2); border-bottom: 1px solid var(--border-standard); }

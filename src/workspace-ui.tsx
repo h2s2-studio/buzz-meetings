@@ -1,5 +1,7 @@
 import type { LiveAgents } from "./live-agents";
 import type { makeRoomSession } from "./room";
+import type { MeetingTranscription } from "./meeting-transcription";
+import type { MeetingRecords } from "./meeting-records";
 import type * as ReactRuntime from "react";
 import { meetingAgents, type ConversationTarget } from "./agents-ui";
 import { makeWorkspaces, readable, writable, uuid, type Channel, type Storage, type WorkspaceConnection, type Workspaces, type WorkspaceState } from "./workspaces";
@@ -22,7 +24,7 @@ export const validWorkspaceRoute = (params: unknown) => !!params && typeof param
 const empty: WorkspaceState = { workspaces: [], busy: "", error: "", pending: [], loading: true };
 const noPanels: readonly PanelContribution[] = [];
 
-export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }> }) {
+export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }>; transcript?: MeetingTranscription; records?: MeetingRecords }) {
   const React = ctx.react;
   const Agents = meetingAgents(ctx, liveAgents, media);
   const { useEffect, useState, useSyncExternalStore } = React;
@@ -152,6 +154,14 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const workspace = saved.workspaces.find(channel => channel.id === id);
     const access = sameScope && live.status === "ready" && readable(channel, live.viewer) && !!workspace;
     const inCall = !!call && call.workspaceChannelId === id && call.phase !== "idle";
+    // A transcript outlives its call until it is saved or discarded, bound to its original channel.
+    const captured = useSyncExternalStore(voice?.transcript?.subscribe ?? subscribe, voice?.transcript?.snapshot ?? (() => undefined));
+    const archived = useSyncExternalStore(voice?.records?.subscribe ?? subscribe, voice?.records?.snapshot ?? (() => undefined));
+    const ended = !inCall && !!captured && captured.channelId === id && captured.segments.length > 0 && !["starting", "transcribing", "reconnecting"].includes(captured.phase);
+    const endedSaved = ended && !!captured.occurrenceId && !!archived?.records.some(record => record.value.channelId === id && record.value.callId === captured.occurrenceId);
+    const [confirmDiscard, setConfirmDiscard] = useState(false);
+    useEffect(() => setConfirmDiscard(false), [ended, captured?.joinId]);
+    function discard() { if (endedSaved || confirmDiscard) { voice?.transcript?.reset(); if (surface === "transcript") setSurface("notes"); } else setConfirmDiscard(true); }
     useEffect(() => {
       setService(undefined); setVoiceError("");
       const abort = new AbortController();
@@ -187,9 +197,10 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
         {service && !service.workspaceVoice && <p className="meeting-workspace-footnote text-caption text-metadata">Workspace voice needs to be enabled on your meeting service.</p>}
         {service?.workspaceVoice && !enabled && <p className="meeting-workspace-footnote text-caption text-metadata">{!canEnable && "A channel owner or admin needs to enable voice. "}Enabling voice adds the Meetings service to this channel as a guest. It can verify members and transcribe the call, with access to channel history and files.</p>}
         {inCall && call?.error && <p role="alert" className="text-danger">{call.error}</p>}
-        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}<Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
+        {ended && <div className="meeting-ended-call" role="group" aria-label="Ended call"><p role="status" className="text-body-sm">{endedSaved ? "This call’s transcript is saved in Meeting records." : "The call ended. Its transcript isn’t saved yet."}</p><div className="meeting-ended-call-actions">{!endedSaved && <Action onClick={() => setSurface("transcript")}>Review and save</Action>}<Action onClick={discard}>{endedSaved ? "Close transcript" : confirmDiscard ? "Confirm discard" : "Discard"}</Action></div></div>}
+        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}{ended && <Action aria-pressed={surface === "transcript"} onClick={() => setSurface("transcript")}>Transcript</Action>}<Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
         <div className="meeting-workspace-surface" key={`${live.scope}:${id}`}>
-          {surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : surface === "transcript" && voice && inCall ? <voice.Transcript roomName={call!.roomName!} close={() => setSurface("call")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
+          {surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : surface === "transcript" && voice && (inCall || ended) ? <voice.Transcript roomName={inCall ? call!.roomName! : captured!.roomName!} close={() => setSurface(inCall ? "call" : "notes")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
             : Conversation && live.scope ? <Conversation id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
         </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and task results stay with this channel after the call.</p>
       </>}{inCall && surface === "call" ? null : children}
