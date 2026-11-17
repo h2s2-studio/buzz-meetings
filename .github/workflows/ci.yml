@@ -22,7 +22,7 @@ jobs:
             browser-install: --with-deps chromium
           # Test WebKit's media stack on the OS used by the Buzz macOS webview.
           - project: webkit
-            runner: macos-15
+            runner: macos-15-intel
             browser-install: chromium webkit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
