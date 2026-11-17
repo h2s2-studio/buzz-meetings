@@ -778,6 +778,21 @@ test("creates a private meeting directly from its sidebar and returns keyboard f
   expect(await page.evaluate(()=>meetingTest.microphoneStates())).toEqual([]);
 });
 
+test("activates before a community is selected and binds workspaces and records once one is", async ({ page }) => {
+  const failures = []; page.on("pageerror", error => failures.push(error.message));
+  await page.goto(`${fixture}?cold&realm=cold-start`);
+  await expect(sidebar(page).getByRole("heading", { name: "Quick rooms" })).toBeVisible();
+  await page.evaluate(() => meetingTest.selectCommunity());
+  await linkGeneral(page);
+  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
+  await expect(records).toContainText("Save a transcript during or after a call");
+  await expect(records.getByRole("alert")).toHaveCount(0);
+  await page.evaluate(() => meetingTest.switchCommunity());
+  await page.evaluate(() => meetingTest.selectCommunity());
+  await expect(workspaces(page).getByRole("button", { name: "General Voice", exact: true })).toBeVisible();
+  expect(failures).toEqual([]);
+});
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);
   await page.routeWebSocket(/\/rooms$/,socket=>socket.onMessage(raw=>{

@@ -32,3 +32,23 @@ test("a failed journal write publishes no transcript",async () => {
   host.storageFailure=true; await records.save(general,transcript,agents); assert.equal(host.publications.length,0); assert.match(records.snapshot().error,/Disk/);
   records.close();connection.close();
 });
+test("records bind storage only once a community is selected, detach on loss and rebind on switch",async () => {
+  const host = new WorkspaceHost(), connection = client(host), listeners = new Set(), opened = [];
+  let current = { ...connection.current(), status:"connecting", origin:undefined, scope:undefined };
+  // Mirrors Buzz's artifact storage: open() needs an identity and a selected community.
+  const storage = { open(definition) { if (!current.viewer || !current.origin) throw new Error("Artifact storage needs a plugin, identity and relay"); opened.push(current.scope); return connection.storage.open(definition); } };
+  const relay = { snapshot:() => current, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };
+  const select = next => { current = { ...current, ...next }; for (const fn of listeners) fn(); };
+  const records = meetingRecords(relay,storage);
+  assert.deepEqual(opened,[]);
+  await records.save(general,transcript,agents); assert.match(records.snapshot().error,/Connect to a community/); assert.equal(host.publications.length,0);
+  select({ status:"ready", origin:"https://relay.example", scope:connection.current().scope });
+  assert.deepEqual(opened,[connection.current().scope]);
+  await records.save(general,transcript,agents); assert.equal(records.snapshot().error,""); await settle();
+  assert.equal(records.snapshot().records.length,1);
+  select({ status:"connecting", origin:undefined, scope:undefined }); await settle();
+  assert.deepEqual(records.snapshot().records,[]);
+  select({ status:"ready", origin:"https://relay.example", scope:connection.current().scope }); await settle();
+  assert.equal(opened.length,2); assert.equal(records.snapshot().records.length,1);
+  records.close(); connection.close();
+});

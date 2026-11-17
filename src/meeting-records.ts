@@ -13,12 +13,14 @@ const parse = (entry: Entry) => {
 };
 export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }, storage: Storage) {
   let state: RecordsState = { busy: false, error: "", records: [], pending: false }, connection = relay.snapshot(), closed = false, generation = 0;
-  let collection: Collection;
+  // Bound lazily: Buzz's artifact storage needs an identity and a selected community.
+  let collection: Collection | undefined;
   const listeners = new Set<() => void>();
   let abort = new AbortController(), stopCollection = () => {};
   const emit = (patch: Partial<RecordsState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener(); };
   async function refresh() {
     const revision = ++generation, scope = connection, store = collection;
+    if (!store) return;
     try {
       const entries: Entry[] = [];
       let after: { order: string; id: string } | undefined;
@@ -30,10 +32,15 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
       if (!closed && revision === generation && connection === scope) emit({ records: entries.flatMap(entry => { const value = parse(entry); return value && readable(scope.session.channels?.list().channels.find(channel => channel.id === value.channelId),scope.viewer) ? [{ id: entry.record.id, value }] : []; }).sort((a,b) => b.value.capturedAt-a.value.capturedAt), pending: !!pending });
     } catch { if (!closed && connection === scope) emit({ error: "Meeting records couldn’t synchronize. Your saved work is retained." }); }
   }
+  const bindable = (value: WorkspaceConnection) => !!value.viewer && !!value.origin && !!value.scope;
   function attach() {
-    collection = storage.open({ name: "meeting-records", type: recordType, version: 1, project(entry) { return parse(entry) ? [{ index: "records", value: "all", order: entry.record.id }] : []; } });
+    if (!bindable(connection)) return;
+    try {
+      collection = storage.open({ name: "meeting-records", type: recordType, version: 1, project(entry) { return parse(entry) ? [{ index: "records", value: "all", order: entry.record.id }] : []; } });
+    } catch { collection = undefined; return; }
     stopCollection = collection.subscribe(() => { void refresh(); }); void refresh();
   }
+  function detach() { stopCollection(); stopCollection = () => {}; collection?.close(); collection = undefined; }
   function requireAccess(scope: WorkspaceConnection, channelId: string, write: boolean) {
     const now = relay.snapshot(), channel = now.session.channels?.list().channels.find(channel => channel.id === channelId);
     if (now.session !== scope.session || now.scope !== scope.scope || now.viewer !== scope.viewer || now.status !== "ready" || !(write ? writable(channel,now.viewer) : readable(channel,now.viewer))) throw new Error("Reconnect and check channel access before saving this meeting.");
@@ -57,6 +64,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
   async function run(work: (scope: WorkspaceConnection, signal: AbortSignal, store: Collection) => Promise<void>) {
     if (state.busy || closed) return;
     const scope = connection, signal = abort.signal, store = collection;
+    if (!store) return emit({ error: "Connect to a community to save meeting records." });
     emit({ busy: true, error: "", saved: undefined });
     try { await work(scope,signal,store); }
     catch (error) { if (connection === scope) emit({ error: error instanceof Error ? error.message : "Couldn’t save this meeting." }); }
@@ -65,8 +73,8 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
   attach();
   const stopRelay = relay.subscribe(() => {
     const next = relay.snapshot();
-    if (next.session !== connection.session || next.scope !== connection.scope || next.viewer !== connection.viewer) {
-      abort.abort(); stopCollection(); collection.close(); connection = next; abort = new AbortController();
+    if (next.session !== connection.session || next.scope !== connection.scope || next.viewer !== connection.viewer || next.origin !== connection.origin || (!collection && bindable(next))) {
+      abort.abort(); detach(); connection = next; abort = new AbortController();
       emit({ busy: false, error: "", saved: undefined, pending: false, records: [] }); attach();
     } else void refresh();
   });
@@ -111,7 +119,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
       }
       return text.join("\n\n");
     },
-    close() { closed=true; abort.abort(); stopRelay(); stopCollection(); collection.close(); listeners.clear(); },
+    close() { closed=true; abort.abort(); stopRelay(); detach(); listeners.clear(); },
   };
 }
 export type MeetingRecords = ReturnType<typeof meetingRecords>;
