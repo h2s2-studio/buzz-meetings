@@ -1,14 +1,16 @@
 import { readable, writable, uuid, type Collection, type Entry, type Event, type Storage, type Template, type WorkspaceConnection } from "./workspaces";
 import type { MeetingTranscriptState } from "./meeting-transcription";
+import { formatTranscript, validEntry, type TranscriptEntry } from "./transcript-format";
 type TaskSource = { tasksFor(channelId: string, occurrenceId?: string): readonly { title: string; status: string; result: string; messageId?: string; author?: { pubkey: string; name: string } }[] };
 export const recordType = "studio.h2s2.meetings.record";
-type SavedRecord = { version: 1; callId?: string; streamId?: string; title: string; channelId: string; capturedAt: number; warning: string; parts: { id: string; revision: string }[]; tasks: { title: string; status: string; result: string; messageId?: string; author?: { pubkey: string; name: string } }[] };
+// Version 2 parts hold structured entries; version 1 parts hold preformatted text.
+type SavedRecord = { version: 1 | 2; callId?: string; streamId?: string; title: string; channelId: string; capturedAt: number; warning: string; parts: { id: string; revision: string }[]; tasks: { title: string; status: string; result: string; messageId?: string; author?: { pubkey: string; name: string } }[] };
 type Intent = { channelId: string; events: Event[]; recordId: string };
 export type RecordsState = { busy: boolean; error: string; saved?: string; pending: boolean; records: { id: string; value: SavedRecord }[] };
 const parse = (entry: Entry) => {
   try {
     const value = JSON.parse(entry.record.current?.content ?? "");
-    return entry.record.availability.state === "available" && entry.record.type === recordType && value.version === 1 && uuid(value.channelId) && Array.isArray(value.parts) && value.parts.every((part: { id?: unknown; revision?: unknown }) => uuid(part?.id) && typeof part?.revision === "string" && /^[0-9a-f]{64}$/.test(part.revision)) && value.parts.length <= 256 && typeof value.title === "string" && value.title.length <= 128 && Number.isSafeInteger(value.capturedAt) && value.capturedAt > 0 && value.capturedAt <= 8640000000000000 && typeof value.warning === "string" && value.warning.length <= 4000 && Array.isArray(value.tasks) && value.tasks.length <= 2048 && value.tasks.every((task: {title?:unknown;status?:unknown;result?:unknown;messageId?:unknown;author?:{pubkey?:unknown;name?:unknown}}) => task && (task.author === undefined || typeof task.author?.pubkey === "string" && /^[0-9a-f]{64}$/.test(task.author.pubkey) && typeof task.author.name === "string" && task.author.name.length <= 64) && typeof task.title === "string" && task.title.length <= 200 && typeof task.status === "string" && ["proposed","working","done","blocked"].includes(task.status) && typeof task.result === "string" && task.result.length <= 2000 && (task.messageId === undefined || typeof task.messageId === "string" && /^[a-f0-9]{64}$/.test(task.messageId))) ? value as SavedRecord : undefined;
+    return entry.record.availability.state === "available" && entry.record.type === recordType && (value.version === 1 || value.version === 2) && uuid(value.channelId) && Array.isArray(value.parts) && value.parts.every((part: { id?: unknown; revision?: unknown }) => uuid(part?.id) && typeof part?.revision === "string" && /^[0-9a-f]{64}$/.test(part.revision)) && value.parts.length <= 256 && typeof value.title === "string" && value.title.length <= 128 && Number.isSafeInteger(value.capturedAt) && value.capturedAt > 0 && value.capturedAt <= 8640000000000000 && typeof value.warning === "string" && value.warning.length <= 4000 && Array.isArray(value.tasks) && value.tasks.length <= 2048 && value.tasks.every((task: {title?:unknown;status?:unknown;result?:unknown;messageId?:unknown;author?:{pubkey?:unknown;name?:unknown}}) => task && (task.author === undefined || typeof task.author?.pubkey === "string" && /^[0-9a-f]{64}$/.test(task.author.pubkey) && typeof task.author.name === "string" && task.author.name.length <= 64) && typeof task.title === "string" && task.title.length <= 200 && typeof task.status === "string" && ["proposed","working","done","blocked"].includes(task.status) && typeof task.result === "string" && task.result.length <= 2000 && (task.messageId === undefined || typeof task.messageId === "string" && /^[a-f0-9]{64}$/.test(task.messageId))) ? value as SavedRecord : undefined;
   } catch { return undefined; }
 };
 export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }, storage: Storage) {
@@ -84,7 +86,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
       requireAccess(scope,channelId,true);
       if (await store.preferences.get("pending")) throw new Error("Finish the previous saved meeting operation first.");
       if (!transcript.segments.length || !scope.session.configArtifactWriter?.kinds?.includes(45010)) throw new Error("There is no transcript to save, or this Buzz version cannot save records.");
-      const events: Event[] = [], parts: { id: string; revision: string }[] = [], rows: string[] = [];
+      const events: Event[] = [], parts: { id: string; revision: string }[] = [], rows: TranscriptEntry[] = [];
       let bytes = 0;
       const sign = async (id: string, type: string, content: string) => {
         const template: Template = { kind:45010, created_at: Math.floor(Date.now()/1000), tags:[["ar","1"],["d",id],["h",channelId],["type",type],["title",transcript.roomName ?? "Meeting"],["op","create"]], content };
@@ -92,14 +94,16 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
         if (signed.pubkey !== scope.viewer || signed.content !== content || JSON.stringify(signed.tags) !== JSON.stringify(template.tags)) throw new Error("The meeting signer changed the record. Nothing was sent.");
         events.push(signed);
       };
-      const flush = async () => { if (!rows.length) return; const id = crypto.randomUUID(); await sign(id,recordType+".part",JSON.stringify({ version:1, channelId, text:rows.join("\n\n") })); parts.push({ id, revision:events.at(-1)!.id }); rows.length=0; bytes=0; };
-      for (const row of transcript.segments) {
-        const text = `[${new Date(row.startedAt).toISOString()}] ${row.speakerName}: ${row.text}`, size = new TextEncoder().encode(text).length;
-        if (bytes+size > 40000) await flush(); rows.push(text); bytes += size;
+      const flush = async () => { if (!rows.length) return; const id = crypto.randomUUID(); await sign(id,recordType+".part",JSON.stringify({ version:2, channelId, entries:rows })); parts.push({ id, revision:events.at(-1)!.id }); rows.length=0; bytes=0; };
+      for (const [index,row] of transcript.segments.entries()) {
+        const entry: TranscriptEntry = { id:(row.id ?? `${transcript.joinId ?? "local"}:${row.seq ?? index}`).slice(0,160), speakerId:row.speakerId, speakerName:row.speakerName, startedAt:row.startedAt, endedAt:row.endedAt, text:row.text };
+        if (!validEntry(entry)) throw new Error("A transcript entry is incomplete. Nothing was saved.");
+        const size = new TextEncoder().encode(JSON.stringify(entry)).length;
+        if (bytes+size > 40000) await flush(); rows.push(entry); bytes += size;
       }
       await flush();
       const recordId = crypto.randomUUID();
-      const record: SavedRecord = { version:1,callId:transcript.occurrenceId ?? transcript.sharedCallId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.tasksFor(channelId, transcript.occurrenceId).map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId, ...(task.author ? { author:{ pubkey:task.author.pubkey, name:task.author.name.slice(0,64) } } : {}) })) };
+      const record: SavedRecord = { version:2,callId:transcript.occurrenceId ?? transcript.sharedCallId,streamId:transcript.sharedStreamId, title:transcript.roomName ?? "Meeting", channelId, capturedAt:Date.now(), warning:[transcript.warning, transcript.base ? "Earlier entries passed the live retention window." : ""].filter(Boolean).join(" "), parts, tasks:agents.tasksFor(channelId, transcript.occurrenceId).map(task => ({ title:task.title, status:task.status, result:task.result, messageId:task.messageId, ...(task.author ? { author:{ pubkey:task.author.pubkey, name:task.author.name.slice(0,64) } } : {}) })) };
       await sign(recordId,recordType,JSON.stringify(record)); requireAccess(scope,channelId,true);
       const intent: Intent = { channelId,events,recordId };
       await store.preferences.update("pending", value => { if (value) throw new Error("Another save is awaiting confirmation."); return JSON.parse(JSON.stringify(intent)); });
@@ -109,15 +113,18 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
     async read(id: string) {
       const record = state.records.find(record => record.id === id); if (!record) throw new Error("This meeting record is unavailable.");
       const scope = connection, signal = abort.signal; requireAccess(scope,record.value.channelId,false);
-      const text: string[] = [];
+      const text: string[] = [], entries: TranscriptEntry[] = [];
       for (const part of record.value.parts) {
         const events = await scope.session.snapshotRead!([{ artifact:"head", kinds:[45010], "#h":[record.value.channelId], "#d":[part.id],limit:1 }],{ signal });
         requireAccess(scope,record.value.channelId,false);
         const event = events[0];
         if (!event || event.id !== part.revision || !event.tags.some(tag => tag[0] === "type" && tag[1] === recordType+".part")) throw new Error("Part of this saved transcript is unavailable.");
-        const value = JSON.parse(event.content); if (value.channelId !== record.value.channelId || typeof value.text !== "string" || value.text.length > 60000) throw new Error("Invalid saved transcript."); text.push(value.text);
+        const value = JSON.parse(event.content); if (value.channelId !== record.value.channelId) throw new Error("Invalid saved transcript.");
+        if (record.value.version === 2) { if (value.version !== 2 || !Array.isArray(value.entries) || event.content.length > 120000 || !value.entries.every(validEntry)) throw new Error("Invalid saved transcript."); entries.push(...value.entries); }
+        else { if (typeof value.text !== "string" || value.text.length > 60000) throw new Error("Invalid saved transcript."); text.push(value.text); }
       }
-      return text.join("\n\n");
+      // Labels are computed across the whole record so same-name speakers stay distinct.
+      return record.value.version === 2 ? formatTranscript(entries) : text.join("\n\n");
     },
     close() { closed=true; abort.abort(); stopRelay(); detach(); listeners.clear(); },
   };

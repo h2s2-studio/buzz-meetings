@@ -5,7 +5,7 @@ const built = await build({ entryPoints:["src/meeting-records.ts"],bundle:true,f
 const { meetingRecords } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 import { WorkspaceHost, client, general } from "./workspace-host.mjs";
 const relay = connection => ({ snapshot:connection.current,subscribe:connection.session.channels.subscribeList });
-const transcript = { occurrenceId:"RM_call", roomName:"General Voice", warning:"", base:0, segments:Array.from({length:40},(_,i) => ({ startedAt:Date.now()+i, speakerName:i%2 ? "Riley" : "Alex", text:"Agreed task. ".repeat(200) })) };
+const transcript = { occurrenceId:"RM_call", roomName:"General Voice", warning:"", base:0, segments:Array.from({length:40},(_,i) => ({ id:`stream:${i+1}`, seq:i+1, startedAt:Date.now()+i, endedAt:Date.now()+i+500, speakerId:i%2 ? "riley-source" : "alex-source", speakerName:i%2 ? "Riley" : "Alex", text:"Agreed task. ".repeat(200) })) };
 const agents = { tasksFor:(channelId,occurrenceId) => channelId === general && occurrenceId === "RM_call" ? [{ title:"Research", status:"done", result:"Notes saved", messageId:"e".repeat(64) }] : [] };
 const settle = () => new Promise(resolve => setTimeout(resolve,0));
 test("meeting snapshots survive restart, chunk full text, and bind exact saved revisions",async () => {
@@ -50,5 +50,23 @@ test("records bind storage only once a community is selected, detach on loss and
   assert.deepEqual(records.snapshot().records,[]);
   select({ status:"ready", origin:"https://relay.example", scope:connection.current().scope }); await settle();
   assert.equal(opened.length,2); assert.equal(records.snapshot().records.length,1);
+  records.close(); connection.close();
+});
+test("saved records keep same-name speakers distinct and still read version 1 snapshots",async () => {
+  const host = new WorkspaceHost(), connection = client(host), records = meetingRecords(relay(connection),connection.storage);
+  const start = Date.UTC(2026,10,17,15,0,0);
+  const rows = [["alex-studio-111111","Agreed on Thursday."],["alex-remote-222222","Friday works better."]].map(([speakerId,text],i) => ({ id:`stream:${i+1}`, seq:i+1, speakerId, speakerName:"Alex", startedAt:start+i*1000, endedAt:start+i*1000+500, text }));
+  await records.save(general,{ ...transcript, segments:rows },agents);
+  const text = await records.read(records.snapshot().saved);
+  assert.match(text,/Alex · 111111: Agreed on Thursday\./); assert.match(text,/Alex · 222222: Friday works better\./);
+  const [record] = records.snapshot().records; assert.equal(record.value.version,2);
+  const part = host.events.get(record.value.parts[0].id);
+  assert.deepEqual(JSON.parse(part.content).entries.map(entry => [entry.id,entry.speakerId]),[["stream:1","alex-studio-111111"],["stream:2","alex-remote-222222"]]);
+  // A record saved by the previous release.
+  const legacyPart = host.sign(connection.current().viewer,{ kind:45010, created_at:1, tags:[["ar","1"],["d","20000000-0000-4000-8000-000000000001"],["h",general],["type","studio.h2s2.meetings.record.part"],["title","Old"],["op","create"]], content:JSON.stringify({ version:1, channelId:general, text:"[2026-01-01T00:00:00.000Z] Alex: Legacy line." }) });
+  host.publish(connection.current().viewer,legacyPart);
+  host.publish(connection.current().viewer,host.sign(connection.current().viewer,{ kind:45010, created_at:1, tags:[["ar","1"],["d","20000000-0000-4000-8000-000000000002"],["h",general],["type","studio.h2s2.meetings.record"],["title","Old"],["op","create"]], content:JSON.stringify({ version:1, title:"Old", channelId:general, capturedAt:1, warning:"", parts:[{ id:"20000000-0000-4000-8000-000000000001", revision:legacyPart.id }], tasks:[] }) }));
+  await settle();
+  assert.equal(await records.read("20000000-0000-4000-8000-000000000002"),"[2026-01-01T00:00:00.000Z] Alex: Legacy line.");
   records.close(); connection.close();
 });

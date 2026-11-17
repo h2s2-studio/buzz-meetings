@@ -4,6 +4,7 @@ import type * as ReactRuntime from "react";
 import type { MeetingTranscription } from "./meeting-transcription";
 import type { makeRoomSession } from "./room";
 import { speakerLabels } from "./speaker-labels";
+import { formatTranscript } from "./transcript-format";
 
 export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTranscription, media: ReturnType<typeof makeRoomSession>, archive?: { records: MeetingRecords; agents: LiveAgents; channel(roomName: string): string | undefined }) {
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
@@ -21,7 +22,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const channelId = state.channelId ?? archive?.channel(roomName);
     const [confirmDiscard, setConfirmDiscard] = useState(false);
     async function copy() { try { await navigator.clipboard.writeText(text()); setNotice("Transcript copied."); } catch { setNotice("Copy is unavailable. Download the transcript instead."); } }
-    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${segments.map(row => `[${new Date(row.startedAt).toLocaleTimeString()}] ${speaker(row)}: ${row.text}`).join("\n\n")}`; }
+    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${formatTranscript(segments)}`; }
     function download() {
       const url = URL.createObjectURL(new Blob([text()],{ type:"text/plain;charset=utf-8" })), link = document.createElement("a");
       link.href=url; link.download=`${roomName.replace(/[^a-z0-9_-]/gi,"_")}-transcript.txt`; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
