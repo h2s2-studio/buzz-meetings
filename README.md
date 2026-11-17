@@ -21,11 +21,11 @@ admission server and LiveKit for voice and video.
 
 Your community must run the [Meetings deployment](docs/deployment.md). By default,
 the app uses the community’s `/rooms` endpoint. For a separate service, open
-**Connection settings** and enter its `wss://…/rooms` address and access key.
+the room header’s **Connection settings** button and enter its `wss://…/rooms` address and access key.
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.1.0` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.1.1` for this release, or leave it
 empty to follow main and use **Check for updates**.
 
 ## In a room
@@ -39,6 +39,10 @@ empty to follow main and use **Check for updates**.
   toolbar retains return-to-room, mute, deafen, and leave actions.
 - Leaving, changing community/identity, or disabling the plugin stops capture
   and remote playback. Reconnecting is shown explicitly.
+- Room chat uses Buzz’s native conversation reader and composer alongside the call.
+  A uniquely matching joined channel is linked automatically; otherwise choose
+  a channel or explicitly create an open one. Chat remains available when voice
+  is disconnected.
 - Add named rooms with the sidebar’s **+**. Room names are saved on this device;
   others add the same name to join the same room on the same community/service.
 

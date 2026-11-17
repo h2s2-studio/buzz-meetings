@@ -32,6 +32,25 @@ test("automatically presents rooms, persists names, and reports denied microphon
   await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
   expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual([]);
 });
+test("keeps the native room conversation available after failed voice and isolates room destinations", async ({ page }) => {
+  await page.goto(`${fixture}?deny`);
+  const conversation = page.getByRole("region", { name: "Native conversation" });
+  await expect(conversation).toHaveAttribute("data-channel", "chat-0");
+  await page.getByRole("textbox", { name: "Room message" }).fill("Notes for General Voice");
+  await page.getByRole("textbox", { name: "Room message" }).press("Enter");
+  await expect(conversation).toContainText("Notes for General Voice");
+  await join(page).click();
+  await expect(page.getByRole("alert")).toContainText("Microphone permission was denied");
+  await expect(conversation).toContainText("Notes for General Voice");
+  await page.getByRole("button", { name: "Add voice channel" }).click();
+  await page.getByLabel("Room name", { exact: true }).fill("Design");
+  await page.getByRole("button", { name: "Add room", exact: true }).click();
+  await sidebar(page).getByRole("button", { name: "Join Design", exact: true }).click();
+  await expect(conversation).toHaveAttribute("data-channel", "chat-1");
+  await expect(conversation).not.toContainText("Notes for General Voice");
+  await page.getByRole("button", { name: "Hide room chat" }).click();
+  await expect(conversation).toHaveCount(0);
+});
 test("cancels a pending microphone prompt without leaking a late capture", async ({ page }) => {
   await page.goto(`${fixture}?hold`); await join(page).click();
   await controls(page).getByRole("button", { name: "Leave room" }).click();

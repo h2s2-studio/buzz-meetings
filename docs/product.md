@@ -29,7 +29,9 @@ unimplemented application-audio capture.
 The initial room list is local to the viewer/community/device. General Voice
 is common to everyone; additional names resolve to the same server destination
 when another member adds that name. Shared room administration and live
-cross-room occupancy are future work, as are application audio, chat alongside
-the stage, and native agent participation. The product reference is Discord's
+cross-room occupancy are future work, as are application audio and native agent participation. Room text chat reuses
+Buzz’s conversation Workspace: a uniquely named joined channel links
+automatically, and other rooms offer explicit channel linking/creation.
+Buzz owns the reader, composer, attachments, and text permissions. The product reference is Discord's
 persistent voice rooms and stream stage; this release does not claim complete
 feature parity.

@@ -6,9 +6,20 @@ const viewer = query.get("viewer") || "Alex";
 const origin = query.get("relay") || location.origin;
 let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer,
   session: { profiles: { snapshot: () => new Map([[viewer, { name: viewer, picture: "https://example.com/avatar.png" }]]), subscribe: () => () => {} }, media: () => undefined } };
-let page, panel, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
+let page, panel, settings, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
 let releaseMicrophone;
 let navigation;
+let chatChannels = ["General Voice", "Design"].map((name, index) => ({ id: `chat-${index}`, name, channelType: "stream", members: [viewer] }));
+const chatListeners = new Set();
+connection.session.channels = { list: () => chatSnapshot, subscribeList(listener) { chatListeners.add(listener); return () => chatListeners.delete(listener); }, ensureList() {} };
+let chatSnapshot = { channels: chatChannels };
+function Workspace({ target, label }) {
+  const [messages, setMessages] = React.useState([]), [draft, setDraft] = React.useState("");
+  return React.createElement("section", { className: "fixture-chat", "aria-label": "Native conversation", "data-channel": target.channelId },
+    React.createElement("header", { className: "panel-header" }, React.createElement("div", { className: "panel-header-label" }, React.createElement("h2", null, label))),
+    React.createElement("div", { className: "fixture-chat-history" }, React.createElement("p", { className: "text-caption text-metadata" }, "Room conversation"), ...messages.map((text, index) => React.createElement("p", { key: index, className: "text-body-sm" }, text))),
+    React.createElement("form", { onSubmit(event) { event.preventDefault(); if(draft.trim()) {setMessages([...messages,draft]);setDraft("");} } }, React.createElement("input", { className: "buzz-input", "aria-label": "Room message", placeholder: "Message the room…", value: draft, onChange: event => setDraft(event.target.value) })));
+}
 const mockMicrophone = async (options) => {
   if (options.video) {
     const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360;
@@ -29,7 +40,23 @@ const mockScreen = async ({ video }) => {
   if (rejectCapture) { rejectCapture = false; throw new DOMException("Capture canceled", "NotAllowedError"); }
   const canvas = document.createElement("canvas"); canvas.width = video.width.ideal; canvas.height = video.height.ideal;
   const context = canvas.getContext("2d"); let frame = 0;
-  const draw = () => { context.fillStyle = (++frame % 2 ? "#316586" : "#345d77"); context.fillRect(0, 0, canvas.width, canvas.height); context.fillStyle = "white"; context.font = "48px sans-serif"; context.fillText(viewer + " · " + frame, 40, 100); };
+  const draw = () => {
+    ++frame;
+    context.fillStyle = "#fafafa"; context.fillRect(0, 0, canvas.width, canvas.height);
+    const scale = canvas.width / 1280; context.save(); context.scale(scale, scale);
+    context.fillStyle = "#f0f0f0"; context.fillRect(0, 0, 1280, 64);
+    context.fillStyle = "#666"; context.font = "18px sans-serif"; context.fillText("" + viewer + " · Shared workspace", 32, 40);
+    context.fillStyle = "#232323"; context.font = "32px sans-serif"; context.fillText(viewer === "Alex" ? "A room for every conversation" : "Meetings · Release plan", 70, 145);
+    context.fillStyle = "#777"; context.font = "18px sans-serif"; context.fillText(viewer === "Alex" ? "ONE PLACE TO TALK, SHOW, AND BUILD TOGETHER" : "VOICE ROOMS / SCREEN SHARING / NATIVE BUZZ", 70, 185);
+    const items = viewer === "Alex" ? ["Join a voice channel", "Bring your team into the room", "Share what you’re working on"] : ["Transport and room admission", "Participant and speaker states", "Desktop and device validation"];
+    items.forEach((item, index) => {
+      context.fillStyle = "#eee"; context.fillRect(70, 240 + index * 100, 1130, 76);
+      context.fillStyle = "#555"; context.font = "22px sans-serif"; context.fillText("0" + (index + 1), 100, 286 + index * 100);
+      context.fillStyle = "#333"; context.fillText(item, 180, 286 + index * 100);
+    });
+    context.fillStyle = "#aaa"; context.font = "15px sans-serif"; context.fillText("Live test screen · " + frame, 70, 635);
+    context.restore();
+  };
   draw(); const stream = canvas.captureStream(12), track = stream.getVideoTracks()[0];
   Object.defineProperty(track, "label", { value: `Window ${captures.length + 1}` }); captures.push(track);
   const interval = setInterval(() => { if (track.readyState === "live") draw(); else clearInterval(interval); }, 84);
@@ -45,8 +72,10 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
 const { apply } = await import("../plugin.js");
 apply({ react: React,
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
+  conversation: { ui: { Workspace } },
   pages: { register(entry) { page = entry; } }, panels: { register(entry) { panel = entry; } },
-  navigation: { async open() { navigation?.(true); return { status: "opened" }; } },
+  settingsCards: { register(entry) { settings = entry; } },
+  navigation: { async open(target) { navigation?.(target.kind === "settings" ? "settings" : true); return { status: "opened" }; } },
   effect(setup) { cleanups.push(setup()); },
 });
 window.meetingTest = {
@@ -63,9 +92,11 @@ function Fixture() {
   const [open, setOpen] = React.useState(true); navigation = setOpen;
   return React.createElement(React.Fragment, null,
     React.createElement("header", { className: "fixture-topbar" },
-      React.createElement("button", { onClick: () => setOpen(!open) }, open ? "Messages" : "Meetings"),
+      React.createElement("div", { className: "fixture-brand text-body-sm" }, "Buzz", React.createElement("span", { className: "text-metadata" }, " / "), "Meetings"),
+      React.createElement("button", { className: "buzz-button", "data-buzz-ui": "", "data-variant": "ghost", "data-size": "sm", onClick: () => setOpen(open === true ? false : true) }, React.createElement("span", { className: "buzz-button-label" }, open === true ? "Messages" : "Meetings")),
       React.createElement("div", { role: "toolbar", "aria-label": "Buzz toolbar" }, React.createElement(panel.toolbar))),
-    open ? React.createElement("div", { className: "fixture-layout" }, React.createElement(page.sidebar), React.createElement(page.component))
+    open === "settings" ? React.createElement("div", { className: "fixture-settings" }, React.createElement("h2", { className: "text-heading" }, "Meetings"), React.createElement(settings.component))
+      : open ? React.createElement("div", { className: "fixture-layout" }, React.createElement(page.sidebar), React.createElement("div", { className: "fixture-main" }, React.createElement(page.component)))
       : React.createElement("p", null, "Messages stay available during your meeting."));
 }
 createRoot(document.querySelector("#app")).render(React.createElement(Fixture));
