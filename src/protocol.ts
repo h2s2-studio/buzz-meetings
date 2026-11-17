@@ -16,6 +16,13 @@ export type RoomAdmission = {
 };
 export type RoomReply = RoomAdmission | { type: "error"; error: string };
 
+export function roomServiceError(type: RoomRequest["type"], error: string): string {
+  if (type === "meeting" && error === "Invalid room request.") {
+    return "This service does not support Meetings yet. Ask your administrator to deploy the Buzz Meetings server, then join again.";
+  }
+  return error.slice(0, 180);
+}
+
 export function socketUrl(value: string, isBroker = true): string {
   const url = new URL(value.trim());
   const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);

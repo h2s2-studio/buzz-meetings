@@ -39,6 +39,10 @@ empty to follow main and use **Check for updates**.
   toolbar retains return-to-room, mute, deafen, and leave actions.
 - Leaving, changing community/identity, or disabling the plugin stops capture
   and remote playback. Reconnecting is shown explicitly.
+- Room chat uses Buzz’s native conversation reader and composer alongside the call.
+  A uniquely matching joined channel is linked automatically; otherwise choose
+  a channel or explicitly create an open one. Chat remains available when voice
+  is disconnected.
 - Add named rooms with the sidebar’s **+**. Room names are saved on this device;
   others add the same name to join the same room on the same community/service.
 

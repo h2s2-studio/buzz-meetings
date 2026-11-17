@@ -5,6 +5,8 @@
 - Use Buzz’s pane headers, navigation rows, controls, typography and color roles.
 - Keep a single call bar in the meeting; show toolbar controls when navigating away.
 - Move connection setup into a dedicated Meetings Settings destination.
+- Add room chat through Buzz’s native conversation workspace.
+- Explain when the server must be upgraded instead of showing “Invalid room request.”
 - Verify fixtures against Buzz 1.0.4’s real design-system styles in light and dark.
 
 ## 0.1.0 — Meetings

@@ -1,4 +1,4 @@
-import { inviteFromParams, socketUrl, type RoomAdmission, type RoomRequest } from "./protocol";
+import { inviteFromParams, socketUrl, roomServiceError, type RoomAdmission, type RoomRequest } from "./protocol";
 
 export function requestRoom(broker: string, request: RoomRequest, signal: AbortSignal): Promise<RoomAdmission> {
   return new Promise((resolve, reject) => {
@@ -20,7 +20,7 @@ export function requestRoom(broker: string, request: RoomRequest, signal: AbortS
         if (typeof data !== "string" || data.length > 10000) return finish();
         const reply = JSON.parse(data);
         if (reply.type === "error" && typeof reply.error === "string") {
-          return finish(undefined, reply.error.slice(0, 180));
+          return finish(undefined, roomServiceError(request.type, reply.error));
         }
         if (reply.type !== "admitted" || typeof reply.token !== "string" || typeof reply.url !== "string") {
           return finish();

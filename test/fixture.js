@@ -9,6 +9,17 @@ let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer
 let page, panel, settings, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
 let releaseMicrophone;
 let navigation;
+let chatChannels = ["General Voice", "Design"].map((name, index) => ({ id: `chat-${index}`, name, channelType: "stream", members: [viewer] }));
+const chatListeners = new Set();
+connection.session.channels = { list: () => chatSnapshot, subscribeList(listener) { chatListeners.add(listener); return () => chatListeners.delete(listener); }, ensureList() {} };
+let chatSnapshot = { channels: chatChannels };
+function Workspace({ target, label }) {
+  const [messages, setMessages] = React.useState([]), [draft, setDraft] = React.useState("");
+  return React.createElement("section", { className: "fixture-chat", "aria-label": "Native conversation", "data-channel": target.channelId },
+    React.createElement("header", { className: "panel-header" }, React.createElement("div", { className: "panel-header-label" }, React.createElement("h2", null, label))),
+    React.createElement("div", { className: "fixture-chat-history" }, React.createElement("p", { className: "text-caption text-metadata" }, "Room conversation"), ...messages.map((text, index) => React.createElement("p", { key: index, className: "text-body-sm" }, text))),
+    React.createElement("form", { onSubmit(event) { event.preventDefault(); if(draft.trim()) {setMessages([...messages,draft]);setDraft("");} } }, React.createElement("input", { className: "buzz-input", "aria-label": "Room message", placeholder: "Message the room…", value: draft, onChange: event => setDraft(event.target.value) })));
+}
 const mockMicrophone = async (options) => {
   if (options.video) {
     const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360;
@@ -61,6 +72,7 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
 const { apply } = await import("../plugin.js");
 apply({ react: React,
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
+  conversation: { ui: { Workspace } },
   pages: { register(entry) { page = entry; } }, panels: { register(entry) { panel = entry; } },
   settingsCards: { register(entry) { settings = entry; } },
   navigation: { async open(target) { navigation?.(target.kind === "settings" ? "settings" : true); return { status: "opened" }; } },

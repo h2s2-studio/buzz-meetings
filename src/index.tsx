@@ -5,8 +5,12 @@ import { presets, type Preset } from "./capture";
 import css from "./meeting.css";
 
 type Profile = { name?: string; picture?: string };
+type ChatChannel = { id: string; name: string; channelType?: string; members?: readonly string[]; huddle?: boolean; parentChannelId?: string; archived?: boolean; cached?: boolean; metadataPending?: boolean };
+const emptyChannels: { channels: readonly ChatChannel[] } = { channels: [] };
 type Connection = { status?: string; origin?: string; viewer?: string; scope?: string;
   session: { profiles: { snapshot(): ReadonlyMap<string, Profile>; subscribe(listener: () => void): () => void };
+    channels?: { list(): { channels: readonly ChatChannel[] }; subscribeList(listener: () => void): () => void; ensureList?(): void };
+    channelCreation?: { available: boolean; create(input: { name: string; visibility: "open" }): Promise<string> };
     media?(url: string, size: "small"): string | undefined } };
 type Context = {
   react: typeof ReactRuntime;
@@ -14,12 +18,13 @@ type Context = {
   effect(setup: () => () => void): void;
   navigation: { open(target: { version: 1; kind: "plugin"; pluginId: string; pageId: string } | { version: 1; kind: "settings"; section: string }): Promise<unknown> };
   settingsCards: { register(card: { id: string; title: string; component: ReactRuntime.ComponentType }): void };
+  conversation: { ui: { Workspace?: ReactRuntime.ComponentType<{ id: string; session: Connection["session"]; scope: string; target: { channelId: string }; label: string }> } };
   pages: { register(page: { id: string; title: string; primary: boolean; placement: "dock"; layout: "workspace";
     icon: string; component: ReactRuntime.ComponentType; sidebar: ReactRuntime.ComponentType<{ children?: ReactRuntime.ReactNode }> }): void };
   panels: { register(panel: { id: string; title: string; matches(target: string): boolean;
     toolbar: ReactRuntime.ComponentType; component: ReactRuntime.ComponentType }): void };
 };
-export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards"];
+export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards", "conversation"];
 const glyphs = {
   headphones: "M3 13v-1a9 9 0 0 1 18 0v1M3 13h3v7H3zm18 0h-3v7h3z",
   microphone: "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8",
@@ -28,6 +33,7 @@ const glyphs = {
   leave: "m4 14 4-2 3 3h2l3-3 4 2v5h-4l-2-3h-4l-2 3H4z",
   plus: "M12 5v14M5 12h14", expand: "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5",
   settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z",
+  chat: "M4 4h16v12H9l-5 4z",
 } as const;
 const validName = (value: string) => value.normalize("NFKC").trim().replace(/\s+/gu, " ");
 const roomKey = (value: string) => validName(value).toLocaleLowerCase("en-US");
@@ -182,9 +188,51 @@ export function apply(ctx: Context) {
       </div>
     </div>;
   }
+  function RoomChat({ room }: { room: string }) {
+    const current = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
+    const session = current.session;
+    const list = useSyncExternalStore(session.channels?.subscribeList ?? subscribe, session.channels?.list ?? (() => emptyChannels));
+    const [linked, setLinked] = useState<{ key: string; id: string }>();
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState("");
+    const key = `studio.h2s2.meetings:chat:${current.scope}:${roomKey(room)}`;
+    useEffect(() => { session.channels?.ensureList?.(); }, [session]);
+    const channels = list.channels.filter(channel => channel.channelType === "stream" && !channel.huddle && !channel.parentChannelId && !channel.archived && !channel.cached && !channel.metadataPending && !!current.viewer && channel.members?.includes(current.viewer));
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(key); } catch { /* Use a matching joined channel. */ }
+    const matches = channels.filter(channel => roomKey(channel.name) === roomKey(room));
+    const chosen = channels.find(channel => channel.id === (linked?.key === key ? linked.id : saved)) ?? (matches.length === 1 ? matches[0] : undefined);
+    const Workspace = ctx.conversation.ui.Workspace;
+    function link(id: string) {
+      if (!channels.some(channel => channel.id === id)) return;
+      try { localStorage.setItem(key, id); } catch { /* Keep this visit usable. */ }
+      setLinked({ key, id });
+    }
+    async function create() {
+      if (!session.channelCreation?.available || pending) return;
+      setPending(true); setError("");
+      try {
+        const id = await session.channelCreation.create({ name: room, visibility: "open" });
+        if (ctx.relay.snapshot().session !== session) return;
+        try { localStorage.setItem(key, id); } catch { /* Keep this visit usable. */ }
+        setLinked({ key, id });
+      } catch { setError("Couldn’t create the room conversation. Try again from Messages."); }
+      finally { setPending(false); }
+    }
+    return <aside className="meeting-chat" aria-label="Room chat">
+      {chosen && Workspace && current.scope ? <Workspace key={`${current.scope}:${chosen.id}`} id="meetings-room-chat" session={session} scope={current.scope} target={{ channelId: chosen.id }} label={`${room} chat`} />
+        : <><header className="panel-header"><div className="panel-header-label"><Icon name="chat" /><h2>Room chat</h2></div></header><div className="meeting-chat-setup text-body-sm">
+          {!Workspace ? <p>Turn on Channels to use Buzz’s room conversation here.</p> : <><p className="text-subtle">Keep the conversation going alongside {room}.</p>
+            <label>Room conversation<select className="buzz-input" disabled={pending} value="" onChange={event => link(event.target.value)}><option value="">Choose a joined channel…</option>{channels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label>
+            {session.channelCreation?.available && <><Button label={pending ? "Creating…" : "Create open channel"} disabled={pending} onClick={() => { void create(); }} /><p className="text-caption text-metadata">Everyone in this community can discover an open channel.</p></>}
+          </>}{error && <p role="alert" className="text-danger">{error}</p>}
+        </div></>}
+    </aside>;
+  }
   function Page() {
     const state = useUI(); const call = useCall(); const video = useRef<HTMLDivElement>(null);
     const [preset, setPreset] = useState<Preset>("balanced"); const [fullscreenError, setFullscreenError] = useState("");
+    const [chatOpen, setChatOpen] = useState(true);
     useEffect(() => { visible++; publish(); return () => { visible--; publish(); }; }, []);
     const connected = call.phase === "connected";
     const watching = call.streams.find(stream => stream.id === call.watching);
@@ -195,11 +243,11 @@ export function apply(ctx: Context) {
     }
     return <section className="meeting-page text-body" data-buzz-ui="" aria-label="Meeting">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name="headphones" /></span><h2>{call.roomName || state.selected}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} participants` : "Voice channel"}</span></div></div>
-        <div className="panel-header-actions">{(call.video || call.screens.length > 0) && <Button label="Fullscreen" icon="expand" iconOnly variant="ghost" onClick={fullscreen} />}<Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
+        <div className="panel-header-actions">{(call.video || call.screens.length > 0) && <Button label="Fullscreen" icon="expand" iconOnly variant="ghost" onClick={fullscreen} />}<Button label={chatOpen ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen} onClick={() => setChatOpen(!chatOpen)} /><Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
       </header>
       {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span><Button label="Connection settings" variant="ghost" onClick={openSettings} /></div>}
       {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
-      <div className="meeting-content">
+      <div className="meeting-body" data-chat-open={chatOpen || undefined}><div className="meeting-content">
         <div className="meeting-stage" ref={video}>
           {call.screens.length ? <div className="meeting-screen-grid">{call.screens.map(screen => <div className="meeting-screen-tile" key={screen.id}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></div>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => media.changeWatch()} /></div></div>
             : call.video ? <div className="meeting-focused-screen"><Video stream={call.video} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen</span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select><Button label="Stop watching" variant="ghost" onClick={() => media.changeWatch()} /></div></div></div>
@@ -210,7 +258,7 @@ export function apply(ctx: Context) {
           {call.sharing && <div className="meeting-preview"><Video stream={call.sharing.preview} label="Your stream preview" /><div className="meeting-preview-caption"><span className="text-caption text-subtle">{call.sharing.label} · Your screen</span><Button label="Change source" icon="screen" iconOnly variant="ghost" disabled={call.picking || call.stopping || !connected} onClick={() => { void media.share(preset); }} /></div></div>}
           {call.streams.map(stream => <button className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={stream.id === call.watching || undefined} type="button" key={stream.id} aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={stream.id === call.watching} disabled={!connected} onClick={() => media.changeWatch(stream.id)}><Icon name="screen" /><span className="navigation-item-label">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></button>)}
         </aside>}
-      </div>
+      </div>{chatOpen && <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />}</div>
       {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call}>
         {call.sharing ? <Button label="Stop sharing" icon="screen" iconOnly active disabled={call.stopping} onClick={() => { void media.stopSharing(); }} /> : <Button label={call.picking ? "Choosing screen…" : "Share screen"} icon="screen" iconOnly disabled={!connected || call.picking || call.stopping} onClick={() => { void media.share(preset); }} />}
       </Controls><details className="meeting-quality"><summary aria-label="Stream options" title="Stream options"><Icon name="settings" /></summary><label className="text-caption">Share quality<select className="buzz-input" data-size="sm" value={preset} disabled={call.picking} onChange={event => setPreset(event.target.value as Preset)}>{Object.entries(presets).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label></details></footer>}
