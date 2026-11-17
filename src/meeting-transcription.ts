@@ -78,7 +78,8 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
             const removed = Math.max(0, combined.length - 4000);
             const warning = packet.error || (packet.gap || packet.dropped > 0 || (state.sharedStreamId && !sameStream) ? "Some speech is missing from the transcript. New speech will continue." : state.warning);
             emit({ segments: combined.slice(removed), base: state.base + removed, sharedStreamId: packet.streamId, sharedCallId: packet.callId,
-              sharedCursor: packet.segments.at(-1)?.seq ?? previous, warning, metrics: packet.metrics,
+              // Keep the highest accepted sequence: a resumed connection replays from the start.
+              sharedCursor: Math.max(previous, incoming.at(-1)?.seq ?? 0), warning, metrics: packet.metrics,
               phase: packet.phase === "recovering" ? "reconnecting" : packet.phase === "active" && state.phase === "reconnecting" ? "transcribing" : state.phase });
           }, error => { if (active === run) stop(error); });
           if (active !== run) { run.socket.close(); return; }

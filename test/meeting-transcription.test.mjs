@@ -77,3 +77,27 @@ test('joining a call does not transcribe automatically and unsupported speech ne
   assert.equal(f.sockets, 0); assert.match(f.transcript.snapshot().error, /Join a voice room/);
   f.transcript.close();
 });
+
+test('resuming a shared transcript replays full pages without duplicating entries', async () => {
+  // Packets arrive the way the broker relays the worker: pages of 20, and a new
+  // connection replays the retained timeline from the start.
+  let receive;
+  const call = { phase: 'connected', joinId: 'join', occurrenceId: 'RM_call', roomName: 'General Voice', transcription: true, sharedTranscription: true, participants: [] };
+  const media = { snapshot: () => call, subscribe: () => () => {}, async setTranscribing() {},
+    async captions(signal, next) { receive = next; return { close() {} }; } };
+  const transcript = makeMeetingTranscription(media);
+  const row = seq => ({ seq, speakerId: seq % 2 ? 'alex-1' : 'alex-2', speakerName: 'Alex', startedAt: seq * 1000, endedAt: seq * 1000 + 500, text: `Entry ${seq}` });
+  const pages = (from, to) => { const out = []; for (let start = from; start <= to; start += 20) out.push(Array.from({ length: Math.min(20, to - start + 1) }, (_, index) => row(start + index))); return out; };
+  const deliver = segments => receive({ streamId: 'stream-1', callId: 'RM_call', phase: 'active', segments, gap: false, dropped: 0, error: '', metrics: { subscribers: 1, sources: 2, queued: 0, jobs: 0, delayMs: 0 } });
+  await transcript.start();
+  for (const page of pages(1, 45)) deliver(page);
+  transcript.stop();
+  await transcript.start();
+  for (const page of pages(1, 45)) deliver(page);
+  deliver([row(46)]);
+  const ids = transcript.snapshot().segments.map(segment => segment.id);
+  assert.equal(ids.length, 46);
+  assert.equal(new Set(ids).size, 46);
+  assert.equal(transcript.snapshot().sharedCursor, 46);
+  transcript.close();
+});
