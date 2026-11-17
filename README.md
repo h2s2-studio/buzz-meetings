@@ -25,7 +25,7 @@ the room header’s **Connection settings** button and enter its `wss://…/room
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.2.0` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.2.1` for this release, or leave it
 empty to follow main and use **Check for updates**.
 
 ## Shared workspaces
@@ -53,6 +53,17 @@ membership. See [workspace behavior and recovery](docs/persistent-workspaces.md)
 
 - Mute, deafen, turn your camera on/off, or leave from the call controls.
   Deafen also mutes your microphone; undeafening leaves it muted until you unmute.
+- If camera access is blocked, use **Open camera settings** on macOS or Windows,
+  allow Buzz, then choose **Try camera again**. Linux shows manual
+  guidance. The settings shortcuts require reviewing the plugin's two
+  fixed host commands when updating; they never change permission themselves.
+  Local camera capture is unavailable in the official macOS Buzz 1.0.4 build
+  tested for this release: that app lacks the required camera declaration and
+  entitlement. The plugin cannot enable it through settings. Receiving camera
+  video from others does not require local camera permission.
+- Click a screen preview or participant avatar to put it on your main stage.
+  Click the selected item again to return to the participant grid. Your choice
+  affects only your window. **Watch all screens** shows simultaneous remote shares.
 - Change your screen source without ending the call. Stop sharing independently
   of leaving voice. Balanced and Sharp text presets offer up to 720p/30 and
   1080p/30; a focused viewer can choose available simulcast layers.

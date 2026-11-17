@@ -6,13 +6,30 @@ export const presets = {
 };
 export type Preset = keyof typeof presets;
 
-export function captureScreen(preset: Preset): Promise<MediaStream> {
-  const { width, height } = presets[preset].video;
+/** Native capture promises cannot be canceled. Retire our wait and stop late streams. */
+export function untilCanceled<T>(promise: Promise<T>, signal: AbortSignal, disposeLate?: (value: T) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cancel = () => reject(new DOMException("Capture canceled", "AbortError"));
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+    promise.then(value => {
+      signal.removeEventListener("abort", cancel);
+      if (signal.aborted) disposeLate?.(value); else resolve(value);
+    }, error => {
+      signal.removeEventListener("abort", cancel);
+      reject(error);
+    });
+  });
+}
+
+export function captureScreen(_preset: Preset): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     return Promise.reject(new Error("Screen capture isn’t available in this Buzz installation."));
   }
   return navigator.mediaDevices.getDisplayMedia({
-    video: { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } },
+    // Let the native picker return its source before applying quality limits.
+    // The same limits are applied to the returned track by limitCapture.
+    video: true,
     audio: false,
   });
 }
@@ -37,6 +54,22 @@ export function captureError(error: unknown) {
   return error instanceof Error && error.message.startsWith("Screen capture isn’t available")
     ? error.message
     : "Couldn’t capture the selected source. Check screen recording permissions.";
+}
+
+export function cameraError(error: unknown) {
+  const name = error && typeof error === "object" && "name" in error ? error.name : undefined;
+  switch (name) {
+    case "NotAllowedError": case "SecurityError":
+      return "Camera access is blocked. Allow Buzz to use the camera, then try again.";
+    case "NotFoundError": case "DevicesNotFoundError":
+      return "No camera was found. Connect a camera and try again.";
+    case "NotReadableError": case "TrackStartError":
+      return "The camera couldn’t start. Close other apps using it, then try again.";
+    case "OverconstrainedError":
+      return "The camera couldn’t use the requested video settings.";
+    default:
+      return "Couldn’t start camera video. Check the camera connection and try again.";
+  }
 }
 
 type SoloRun = {

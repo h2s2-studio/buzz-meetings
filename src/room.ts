@@ -3,7 +3,7 @@ import {
   type LocalVideoTrack, type RemoteTrackPublication, type LocalAudioTrack, type Participant,
 } from "livekit-client";
 import { requestRoom } from "./admission";
-import { captureError, captureScreen, limitCapture, presets, stopStream, type Preset } from "./capture";
+import { cameraError, captureError, captureScreen, limitCapture, presets, stopStream, untilCanceled, type Preset } from "./capture";
 import { inviteLink, socketUrl, type RoomRequest } from "./protocol";
 
 type RoomPhase = "idle" | "connecting" | "connected" | "reconnecting";
@@ -21,6 +21,13 @@ type ActiveRoom = {
   publish?: Capture;
   pending?: MediaStreamTrack;
   picking: boolean;
+  capturePhase?: "choosing" | "preparing" | "publishing";
+  screenAbort?: AbortController;
+  cameraAbort?: AbortController;
+  cameraPhase?: "choosing" | "publishing";
+  pendingCamera?: MediaStream;
+  camera?: LocalVideoTrack;
+  cameraDenied?: boolean;
   stopping: boolean;
   watching?: RemoteTrackPublication;
   remote?: MediaStream;
@@ -40,6 +47,9 @@ export type RoomSnapshot = {
   error?: string;
   invite?: ActiveRoom["invite"];
   picking: boolean;
+  capturePhase?: ActiveRoom["capturePhase"];
+  cameraPhase?: ActiveRoom["cameraPhase"];
+  cameraDenied?: boolean;
   stopping: boolean;
   sharing?: Pick<Capture, "label" | "preset" | "preview">;
   streams: Stream[];
@@ -76,7 +86,6 @@ function layers(publication?: RemoteTrackPublication): RoomSnapshot["layers"] {
 export function makeRoomSession() {
   let active: ActiveRoom | undefined;
   let snapshot = idle;
-  let teardown: Promise<void> = Promise.resolve();
   const listeners = new Set<() => void>();
   function emit(next: RoomSnapshot) {
     snapshot = next;
@@ -105,7 +114,7 @@ export function makeRoomSession() {
       run.watching?.setVideoQuality(VideoQuality.HIGH);
     }
     emit({
-      phase, error, streams, invite: run.invite, picking: run.picking, stopping: run.stopping,
+      phase, error, streams, invite: run.invite, picking: run.picking, capturePhase: run.capturePhase, cameraPhase: run.cameraPhase, cameraDenied: run.cameraDenied, stopping: run.stopping,
       sharing: run.publish && {
         label: run.publish.label, preset: run.publish.preset, preview: run.publish.preview,
       },
@@ -138,14 +147,20 @@ export function makeRoomSession() {
     if (run) {
       clearInterval(run.ticker);
       run.abort.abort();
+      run.screenAbort?.abort();
+      run.cameraAbort?.abort();
       run.pending?.stop();
       run.publish?.source.stop();
       stopStream(run.pendingMicrophone);
+      stopStream(run.pendingCamera);
+      run.camera?.stop();
       run.microphone?.stop();
       run.room.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.stop();
       for (const element of run.audio.values()) { element.pause(); element.srcObject = null; element.remove(); }
       run.audio.clear();
-      teardown = run.room.disconnect().catch(() => {});
+      // Every room owns separate tracks and callbacks. An old SDK disconnect
+      // must not block joining a new room after a stalled native capture.
+      void run.room.disconnect().catch(() => {});
     }
     emit({ ...idle, error });
   }
@@ -219,7 +234,7 @@ export function makeRoomSession() {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture isn’t available in this Buzz installation.");
         // Acquire from this explicit room click, before network work. A canceled
         // permission prompt must never leave capture running in another room.
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        const stream = await untilCanceled(navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }), run.abort.signal, stopStream);
         if (active !== run) { stopStream(stream); return; }
         run.pendingMicrophone = stream;
         void room.startAudio().catch(sync);
@@ -244,7 +259,6 @@ export function makeRoomSession() {
         };
       }
       try {
-        await teardown;
         if (active !== run) return;
         await room.connect(admission.url, admission.token, { autoSubscribe: false, maxRetries: 0 });
       } catch {
@@ -308,12 +322,59 @@ export function makeRoomSession() {
 
   async function setCamera(enabled: boolean) {
     const run = active;
-    if (!run || snapshot.phase !== "connected") return;
+    if (!run || snapshot.phase !== "connected" || run.cameraAbort) return;
+    if (!enabled) {
+      const camera = run.camera;
+      if (!camera) return;
+      camera.stop(); run.camera = undefined;
+      try { await run.room.localParticipant.unpublishTrack(camera); refresh(run, undefined, ""); }
+      catch { refresh(run, undefined, "Couldn’t stop camera video. Leave the room to disconnect it."); }
+      return;
+    }
+    const operation = new AbortController(); run.cameraAbort = operation; run.cameraPhase = "choosing"; run.cameraDenied = false;
+    refresh(run, undefined, "");
     try {
-      const publication = await run.room.localParticipant.setCameraEnabled(enabled, { resolution: { width: 640, height: 360 } });
-      if (active !== run) { publication?.track?.stop(); return; }
-      refresh(run);
-    } catch { refresh(run, undefined, "Couldn’t open the camera. Check camera permissions and try again."); }
+      // Own device acquisition outside the SDK, so leaving/canceling can retire
+      // an unresolved OS request without leaving a pending SDK publication.
+      const stream = await untilCanceled(navigator.mediaDevices.getUserMedia({ audio: false, video: { width: { ideal: 640 }, height: { ideal: 360 } } }), operation.signal, stopStream);
+      if (active !== run) { stopStream(stream); return; }
+      run.pendingCamera = stream;
+      const track = stream.getVideoTracks()[0];
+      if (!track || track.readyState !== "live") throw new Error("No live camera track");
+      run.cameraPhase = "publishing"; refresh(run);
+      const publication = await run.room.localParticipant.publishTrack(track, { source: Track.Source.Camera });
+      if (active !== run) {
+        stopStream(stream); publication.track?.stop();
+        if (publication.track) await run.room.localParticipant.unpublishTrack(publication.track).catch(() => {});
+        return;
+      }
+      if (!publication.videoTrack) throw new Error("No camera publication");
+      run.camera = publication.videoTrack;
+      run.pendingCamera = undefined;
+      track.addEventListener("ended", () => { if (active === run && run.camera === publication.videoTrack) void setCamera(false); }, { once: true });
+      refresh(run, undefined, "");
+    } catch (error) {
+      if (!operation.signal.aborted) {
+        run.cameraDenied = error instanceof DOMException && ["NotAllowedError", "SecurityError"].includes(error.name);
+        refresh(run, undefined, cameraError(error));
+      }
+    } finally {
+      stopStream(run.pendingCamera); run.pendingCamera = undefined;
+      run.cameraAbort = undefined; run.cameraPhase = undefined; refresh(run);
+    }
+  }
+
+  function cancelCamera() {
+    const run = active;
+    if (!run || run.cameraPhase !== "choosing") return;
+    run.cameraAbort?.abort();
+  }
+
+  function cancelScreen() {
+    const run = active;
+    if (!run || run.capturePhase === "publishing") return;
+    run.screenAbort?.abort();
+    run.pending?.stop();
   }
 
   function changeWatch(id?: string) {
@@ -362,6 +423,7 @@ export function makeRoomSession() {
   async function stopSharing() {
     const run = active;
     if (!run || !run.publish) return;
+    cancelScreen();
     const capture = run.publish;
     run.publish = undefined;
     run.stopping = true;
@@ -378,7 +440,10 @@ export function makeRoomSession() {
   }
 
   async function pickSource(run: ActiveRoom, preset: Preset, previous?: Capture) {
-    const incoming = await captureScreen(preset);
+    run.capturePhase = "choosing";
+    refresh(run);
+    const signal = run.screenAbort?.signal ?? run.abort.signal;
+    const incoming = await untilCanceled(captureScreen(preset), signal, stopStream);
     const source = incoming.getVideoTracks()[0];
     if (active !== run || run.publish !== previous) {
       stopStream(incoming);
@@ -389,13 +454,20 @@ export function makeRoomSession() {
       throw new Error("The selected source is unavailable.");
     }
     run.pending = source;
-    await limitCapture(source, preset);
-    if (active !== run || run.publish !== previous) return;
+    run.capturePhase = "preparing";
+    refresh(run);
+    await untilCanceled(limitCapture(source, preset), signal);
+    if (active !== run || run.publish !== previous) {
+      source.stop();
+      return;
+    }
     return source;
   }
 
   async function publishSource(run: ActiveRoom, source: MediaStreamTrack, preset: Preset, previous?: Capture) {
     if (source.readyState !== "live") throw new Error("The selected source is unavailable.");
+    run.capturePhase = "publishing";
+    refresh(run);
     let published: LocalVideoTrack | undefined;
     if (previous) {
       published = await previous.published.replaceTrack(source);
@@ -411,7 +483,11 @@ export function makeRoomSession() {
       });
       published = publication.videoTrack;
     }
-    if (active !== run || run.publish !== previous) return;
+    if (active !== run || run.publish !== previous) {
+      source.stop(); published?.stop();
+      if (published) await run.room.localParticipant.unpublishTrack(published).catch(() => {});
+      return;
+    }
     if (!published || source.readyState !== "live") {
       if (published) await run.room.localParticipant.unpublishTrack(published);
       if (previous) await stopSharing();
@@ -433,13 +509,14 @@ export function makeRoomSession() {
     const previous = run.publish;
     preset = previous?.preset ?? preset;
     run.picking = true;
+    const operation = new AbortController(); run.screenAbort = operation;
     refresh(run, undefined, "");
     let source: MediaStreamTrack | undefined;
     try {
       source = await pickSource(run, preset, previous);
       if (source) await publishSource(run, source, preset, previous);
     } catch (error) {
-      if (active === run && run.publish === previous) {
+      if (active === run && run.publish === previous && !operation.signal.aborted) {
         if (previous && source && previous.published.mediaStreamTrack === source) {
           try {
             await previous.published.replaceTrack(previous.source);
@@ -453,12 +530,14 @@ export function makeRoomSession() {
       if (run.publish?.source !== run.pending) run.pending?.stop();
       run.pending = undefined;
       run.picking = false;
+      run.capturePhase = undefined;
+      run.screenAbort = undefined;
       refresh(run);
     }
   }
 
   return {
-    connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera,
+    connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera, cancelCamera, cancelScreen,
     snapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);
