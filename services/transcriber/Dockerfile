@@ -3,7 +3,7 @@ WORKDIR /app
 COPY services/transcriber/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY services/transcriber/app.py ./app.py
-ENV HF_HUB_DISABLE_IMPLICIT_TOKEN=1 WHISPER_MODEL=base.en WHISPER_MODEL_DIR=/models WHISPER_THREADS=2
+ENV HF_HUB_DISABLE_IMPLICIT_TOKEN=1 HF_HOME=/models/huggingface WHISPER_MODEL=base.en WHISPER_MODEL_DIR=/models WHISPER_THREADS=2
 RUN mkdir -p /models && chown 65532:65532 /models
 USER 65532:65532
 EXPOSE 8092
