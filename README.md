@@ -53,6 +53,10 @@ membership. See [workspace behavior and recovery](docs/persistent-workspaces.md)
 
 ## In a room
 
+- In the development build, open **Transcript** and choose **Start transcription**
+  to follow speakers without an agent or linked chat. Pause and resume independently
+  of agent listening. Text stays in this app session until rejoin or reload;
+  see [Live transcripts](docs/transcription.md).
 - Mute, deafen, turn your camera on/off, or leave from the call controls.
   Deafen also mutes your microphone; undeafening leaves it muted until you unmute.
 - If camera access is blocked, use **Open camera settings** on macOS or Windows,

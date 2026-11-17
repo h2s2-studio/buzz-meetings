@@ -27,6 +27,9 @@ type ActiveRoom = {
   publish?: Capture;
   pending?: MediaStream;
   transcription: boolean;
+  transcribing?: boolean;
+  listener?: { name: string; mode: "act" | "assist" };
+  metadataUpdate?: Promise<void>;
   screenAudio: boolean;
   picking: boolean;
   capturePhase?: "choosing" | "preparing" | "publishing";
@@ -71,7 +74,7 @@ export type RoomSnapshot = {
   quality: Quality;
   layers: { value: VideoQuality; height: number }[];
   roomName?: string;
-  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
+  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; transcribing: boolean; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
   muted: boolean;
   deafened: boolean;
   audioBlocked: boolean;
@@ -137,14 +140,14 @@ export function makeRoomSession() {
       watching: run.watching?.trackSid, video: run.remote, quality: run.quality, layers: available,
       roomName: run.roomName,
       participants: phase === "connecting" ? [] : [run.room.localParticipant, ...run.room.remoteParticipants.values()].map((person: Participant) => {
-        let picture: string | undefined; let listener: string | undefined;
-        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
+        let picture: string | undefined; let listener: string | undefined; let transcribing = false;
+        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; transcribing = metadata.liveTranscription === true; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
         const cameraTrack = person.isCameraEnabled ? person.getTrackPublication(Track.Source.Camera)?.videoTrack?.mediaStreamTrack : undefined;
         const previousPerson = snapshot.participants.find(item => item.id === person.identity);
         const previous = previousPerson?.video;
         const audioTrack = person.getTrackPublication(Track.Source.Microphone)?.audioTrack?.mediaStreamTrack;
         const audio = audioTrack ? previousPerson?.audio?.getAudioTracks()[0] === audioTrack ? previousPerson.audio : new MediaStream([audioTrack]) : undefined;
-        return { id: person.identity, name: person.name || "Participant", picture, listener,
+        return { id: person.identity, name: person.name || "Participant", picture, listener, transcribing,
           local: person === run.room.localParticipant, speaking: person.isSpeaking,
           muted: !person.isMicrophoneEnabled, audio,
           video: cameraTrack ? previous?.getVideoTracks()[0] === cameraTrack ? previous : new MediaStream([cameraTrack]) : undefined };
@@ -624,12 +627,26 @@ export function makeRoomSession() {
     }
   }
 
+  function updateMetadata(run: ActiveRoom) {
+    const update = (run.metadataUpdate ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (active !== run) return;
+      let picture: string | undefined;
+      try { const metadata = JSON.parse(run.room.localParticipant.metadata || "{}"); if (typeof metadata.picture === "string") picture = metadata.picture; } catch { /* No profile image. */ }
+      await run.room.localParticipant.setMetadata(JSON.stringify({ ...(picture ? { picture } : {}), ...(run.transcribing ? { liveTranscription: true } : {}), ...(run.listener ? { liveAgent: { name: run.listener.name.slice(0,64), mode: run.listener.mode } } : {}) }));
+      refresh(run);
+    });
+    run.metadataUpdate = update;
+    return update;
+  }
   async function setListener(callId: string, listener?: { name: string; mode: "act" | "assist" }) {
-    const run = active; if (!run || run.id !== callId || snapshot.phase !== "connected") return;
-    let picture: string | undefined;
-    try { const metadata = JSON.parse(run.room.localParticipant.metadata || "{}"); if (typeof metadata.picture === "string") picture = metadata.picture; } catch { /* No profile image. */ }
-    await run.room.localParticipant.setMetadata(JSON.stringify({ ...(picture ? { picture } : {}), ...(listener ? { liveAgent: { name: listener.name.slice(0,64), mode: listener.mode } } : {}) }));
-    refresh(run);
+    const run = active; if (!run || run.id !== callId) return;
+    run.listener = listener;
+    await updateMetadata(run);
+  }
+  async function setTranscribing(callId: string, value: boolean) {
+    const run = active; if (!run || run.id !== callId) return;
+    run.transcribing = value;
+    await updateMetadata(run);
   }
   function transcribe(signal: AbortSignal, receive: (segments: TranscriptSegment[]) => void, failed: (error: string) => void) {
     const run = active;
@@ -637,7 +654,7 @@ export function makeRoomSession() {
     return openTranscription(run.broker, run.meeting, signal, receive, failed);
   }
   return {
-    setListener, transcribe, connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera, cancelCamera, cancelScreen,
+    setListener, setTranscribing, transcribe, connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera, cancelCamera, cancelScreen,
     snapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);

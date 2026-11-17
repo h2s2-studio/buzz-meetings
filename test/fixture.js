@@ -139,7 +139,7 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
   return typeof value === "function" ? value.bind(target) : value;
 } }) });
 const { apply } = await import("../plugin.js");
-apply({ react: React, agents: nativeAgents, artifactStorage: host.storage,
+apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage: host.storage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },

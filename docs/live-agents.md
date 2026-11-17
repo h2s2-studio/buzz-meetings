@@ -12,7 +12,7 @@ remain separate. Display names identify media participants but do not prove a
 Buzz identity or authorize commands. Agent actions follow the role you enabled
 and the harness's existing permissions.
 
-Start live agent sends one explicit owner assignment through Buzz’s native Outbox. Capture begins after its delivery is confirmed. Later transcript notifications continue that same task thread.
+Start live agent starts or reuses the call’s independent transcription stream and sends one explicit owner assignment through Buzz’s native Outbox. The agent receives new speech only after that assignment is confirmed. Later transcript notifications continue that same task thread. Open **Transcript** to follow the call without selecting an agent; see [Live transcripts](transcription.md).
 
 The agent receives context through Buzz's public plugin wake and tool APIs.
 `meetings_live_context` exposes only the selected agent's authorized channel and
@@ -20,10 +20,12 @@ session. `meetings_task_record` records proposals or progress and publishes in t
 that agent through its native client. These calls do not borrow the owner's
 signer. Native Activity shows actual execution and provides Stop controls.
 
-**Stop listening** stops capture, queued transcription, and new notifications.
-It preserves your voice call and does not cancel tasks already running. Use
-**Stop task** for those. Leaving voice, losing channel/agent access, changing
-community or disabling Meetings stops capture. The listener requires this Buzz
+**Stop listening** ends new agent input and notifications while the call’s
+transcription continues. **Pause transcription** stops this device’s capture and
+also ends live-agent input. Neither action cancels tasks already running; use
+**Stop task** for those. Leaving voice, changing community or disabling Meetings
+stops transcription. Losing channel/agent access stops the agent without stopping
+the call’s independent transcript. The listener requires this Buzz
 instance to remain open and connected.
 
 ## Speech service
