@@ -9,6 +9,9 @@ the Rust admission server and LiveKit.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
+Screenshots use the browser fixture. Media transport is real; native content and
+agent execution are simulated and still require acceptance in Buzz.
+
 ## Install in Buzz
 
 1. Open **Settings → Plugins → Manage plugins → Add**.
