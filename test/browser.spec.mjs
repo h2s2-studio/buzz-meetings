@@ -481,13 +481,21 @@ test("keeps a same-name quick room and workspace distinct across selection, rena
   await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
   await expect(controls(page)).not.toHaveAttribute("data-occurrence", occurrence);
 });
-test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }) => {
+test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }, info) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
   const other = await context.newPage();
   await Promise.all([page.goto(`${fixture}?viewer=Alex`), other.goto(`${fixture}?viewer=Riley`)]);
+  // A room of its own: a page closed mid-call elsewhere keeps a shared room alive until LiveKit times it out.
+  const roomName = `Occurrence ${info.project.name} ${Date.now() % 100000}`;
+  for (const client of [page, other]) {
+    await client.getByRole("button", { name: "Add voice channel", exact: true }).click();
+    await client.getByLabel("Room name", { exact: true }).fill(roomName);
+    await client.getByRole("button", { name: "Add room", exact: true }).click();
+  }
+  const room = client => sidebar(client).getByRole("button", { name: `Join ${roomName}`, exact: true });
   const occurrence = async client => { await expect(controls(client)).toHaveAttribute("data-occurrence", /^RM_[A-Za-z0-9]+$/, { timeout: 15000 }); return controls(client).getAttribute("data-occurrence"); };
-  const connect = async client => { await join(client).click(); await expect(controls(client).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 }); return occurrence(client); };
-  const leave = async client => { await controls(client).getByRole("button", { name: "Leave room", exact: true }).click(); await expect(join(client)).toBeVisible(); };
+  const connect = async client => { await room(client).click(); await expect(controls(client).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 }); return occurrence(client); };
+  const leave = async client => { await controls(client).getByRole("button", { name: "Leave room", exact: true }).click(); await expect(room(client)).toBeVisible(); };
   const first = await connect(page);
   expect(await connect(other)).toBe(first);
   await leave(other);
