@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { fixtureWorkspaceHost } from "./workspace-browser.js";
-const cleanups = [], listeners = new Set(), captures = [], microphones = [], cameras = [], contexts = [];
+const cleanups = [], listeners = new Set(), captures = [], screenAudioCaptures = [], microphones = [], cameras = [], contexts = [];
 const query = new URLSearchParams(location.search);
 const displayName = query.get("viewer") || "Alex";
 const viewer = ({ Alex: "a", Riley: "b", Sam: "c" }[displayName] || "a").repeat(64);
@@ -9,21 +9,45 @@ const origin = query.get("relay") || location.origin;
 const host = await fixtureWorkspaceHost({ viewer, realm: query.get("realm") || "default" });
 let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer,
   session: { ...host.session, profiles: { snapshot: () => new Map([[viewer, { name: displayName, picture: "https://example.com/avatar.png" }]]), subscribe: () => () => {} }, media: () => undefined } };
+let meetingOwnerRoot; const sendObservers = new Set();
+const agentTools = new Map(), agentWakes = [], agentInstructions = [];
+const fixtureAgent = { key: "b".repeat(64), pubkey: "b".repeat(64), name: "Research helper", owner: viewer, place: "here" };
+const nativeAgents = { snapshot: () => ({ agents: [fixtureAgent], running: [fixtureAgent] }), subscribe: () => () => {}, wake(key, input) { agentWakes.push({ key, ...input }); }, addInstructions(input) { agentInstructions.push(input); }, addTool(tool) { agentTools.set(tool.name, tool); } };
+const navigationTargets = [], taskRequests = [], agentListeners = new Set();
+let agentActivity = { status: "listening", turns: [], local: [] };
+if (query.has("agents")) {
+  const agentChoices = { selectable: [{ pubkey: "b".repeat(64), name: "Research helper" }, { pubkey: "d".repeat(64), name: "New helper" }] };
+  connection.session.agentChoices = { snapshot: () => agentChoices, subscribe: () => () => {}, ensure() {} };
+  connection.session.agentActivity = {
+    snapshot: () => agentActivity, subscribe(fn) { agentListeners.add(fn); return () => agentListeners.delete(fn); }, activate: () => () => {},
+    async interrupt(agent, channelId, messageId) { agentActivity = { ...agentActivity, local: agentActivity.local.map(work => work.agent === agent && work.channelId === channelId && work.messageId === messageId ? { ...work, state: "stopped" } : work) }; for (const fn of agentListeners) fn(); },
+  };
+  connection.session.outbox = { observeSend(listener) { sendObservers.add(listener); return () => sendObservers.delete(listener); } };
+  connection.session.messages = { async send(channelId, text, mentions) {
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2,"0")).join("");
+    const event = { id, kind: 9, pubkey: viewer, content: text, tags: [["h",channelId], ...mentions.map(key => ["p",key])] };
+    if (text.includes("Live meeting session:")) meetingOwnerRoot = id;
+    const receipts = [...sendObservers].map(listener => listener(event, new AbortController().signal));
+    taskRequests.push({ channelId, text, mentions }); await host.request("message", { id: channelId, text });
+    for (const receipt of receipts) receipt?.([]); return id;
+  } };
+}
 const settings = new Map();
 let page, panel, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
 let releaseMicrophone, navigation, microphoneRequests = 0;
+let omitSound = false;
 let holdCamera = false, holdScreen = false, releaseCamera, releaseScreen, denyCamera = false;
 const cameraSettingsCommands = [];
 // These two components stand in for Buzz's native conversation/Canvas owners.
 // Their shared state comes from the test HTTP service, never browser-local data.
-function Workspace({ target, label }) {
+function Workspace({ target, label, actions = [] }) {
   const shared = React.useSyncExternalStore(host.subscribe, host.snapshot);
   const [draft, setDraft] = React.useState(""), [error, setError] = React.useState("");
   const channel = shared.channels.find(channel => channel.id === target.channelId);
   const messages = shared.messages[target.channelId] || [];
   const readOnly = !channel || channel.readOnly;
   return React.createElement("section", { className: "fixture-chat", "aria-label": "Native conversation", "data-channel": target.channelId },
-    React.createElement("header", { className: "panel-header" }, React.createElement("div", { className: "panel-header-label" }, React.createElement("h2", null, label))),
+    React.createElement("header", { className: "panel-header" }, React.createElement("div", { className: "panel-header-label" }, React.createElement("h2", null, label)), React.createElement("div", { className: "panel-header-actions" }, ...actions.map(action => React.createElement("button", { key: action.label, type: "button", className: "buzz-button", "data-buzz-ui": "", "aria-label": action.label, onClick: action.run }, action.label)))),
     React.createElement("div", { className: "fixture-chat-history" }, React.createElement("p", { className: "text-caption text-metadata" }, "Conversation contract fixture"), ...messages.map(message => React.createElement("p", { key: message.id, className: "text-body-sm" }, message.text))),
     error && React.createElement("p", { role: "alert" }, error),
     React.createElement("form", { onSubmit(event) { event.preventDefault(); if (draft.trim() && !readOnly) void host.request("message", { id: target.channelId, text: draft }).then(() => { setDraft(""); setError(""); }).catch(error => setError(error.message)); } }, React.createElement("input", { className: "buzz-input", "aria-label": "Room message", placeholder: "Message the room…", value: draft, disabled: readOnly, onChange: event => setDraft(event.target.value) })));
@@ -61,12 +85,19 @@ const mockMicrophone = async (options) => {
   if (holdMicrophone) await new Promise(resolve => { releaseMicrophone = resolve; });
   if (rejectMicrophone) throw new DOMException("Permission denied", "NotAllowedError");
   const audio = new AudioContext(); contexts.push(audio); void audio.resume();
+  if (query.has("speech")) {
+    const response = await fetch(`/test/speech/${displayName === "Riley" ? "riley" : "alex"}.wav`);
+    const buffer = await audio.decodeAudioData(await response.arrayBuffer());
+    const source = audio.createBufferSource(), destination = audio.createMediaStreamDestination();
+    source.buffer = buffer; source.loop = true; source.connect(destination); source.start();
+    microphones.push(destination.stream.getAudioTracks()[0]); return destination.stream;
+  }
   const oscillator = audio.createOscillator(), destination = audio.createMediaStreamDestination();
   oscillator.frequency.value = 440; oscillator.connect(destination); oscillator.start();
   const track = destination.stream.getAudioTracks()[0]; microphones.push(track);
   return destination.stream;
 };
-const mockScreen = async ({ video }) => {
+const mockScreen = async ({ video, audio: sound }) => {
   if (holdScreen) await new Promise(resolve => { releaseScreen = resolve; });
   if (rejectCapture) { rejectCapture = false; throw new DOMException("Capture canceled", "NotAllowedError"); }
   const canvas = document.createElement("canvas"); canvas.width = video === true ? 1280 : video.width.ideal; canvas.height = video === true ? 720 : video.height.ideal;
@@ -91,6 +122,13 @@ const mockScreen = async ({ video }) => {
   draw(); const stream = canvas.captureStream(12), track = stream.getVideoTracks()[0];
   Object.defineProperty(track, "label", { value: `Window ${captures.length + 1}` }); captures.push(track);
   const interval = setInterval(() => { if (track.readyState === "live") draw(); else clearInterval(interval); }, 84);
+  if (sound && !omitSound) {
+    const context = new AudioContext(); contexts.push(context); void context.resume();
+    const oscillator = context.createOscillator(), destination = context.createMediaStreamDestination();
+    oscillator.frequency.value = 880; oscillator.connect(destination); oscillator.start();
+    const shared = destination.stream.getAudioTracks()[0]; screenAudioCaptures.push(shared); stream.addTrack(shared);
+  }
+  omitSound = false;
   return stream;
 };
 const devices = navigator.mediaDevices;
@@ -101,19 +139,29 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
   return typeof value === "function" ? value.bind(target) : value;
 } }) });
 const { apply } = await import("../plugin.js");
-apply({ react: React, artifactStorage: host.storage,
+apply({ react: React, agents: nativeAgents, artifactStorage: host.storage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
   pages: { register(entry) { page = entry; } }, panels: { register(entry) { panel = entry; }, snapshot: () => nativePanels, subscribe: () => () => {} },
   settingsCards: { register(entry) { settings.set(entry.id, entry); } },
-  navigation: { async open(target) { navigation?.(target); return { status: "opened" }; } },
+  navigation: { async open(target) { navigationTargets.push(target); if (target.kind !== "conversation") navigation?.(target); return { status: "opened" }; } },
   effect(setup) { cleanups.push(setup()); },
 });
 window.meetingTest = {
+  agentWakes: () => agentWakes,
+  async callAgentTool(name, args, overrides = {}) {
+    const client = { key: fixtureAgent.key, pubkey: fixtureAgent.pubkey, owner: viewer, signal: new AbortController().signal, async publish(event) { await host.request("agentMessage", { actor: fixtureAgent.pubkey, id: event.tags.find(tag => tag[0] === "h")[1], text: event.content }); return { id: "f".repeat(64) }; }, ...overrides.client };
+    return JSON.parse(await agentTools.get(name).call(client, { channel: host.snapshot().channels.find(channel => channel.name === "General Voice")?.id, root: meetingOwnerRoot, ...overrides.context }, args));
+  },
+  navigationTargets: () => navigationTargets,
+  taskRequests: () => taskRequests,
+  setAgentActivity(rows) { agentActivity = { ...agentActivity, local: rows.map(row => ({ ...row, scope: connection.scope })) }; for (const fn of agentListeners) fn(); },
   workspaceControl: input => host.request("control", input),
   workspaceState: host.snapshot,
   navigate: target => navigation?.(target),
+  screenAudioStates: () => screenAudioCaptures.map(track => track.readyState),
+  omitNextScreenSound() { omitSound = true; },
   cancelNextCapture() { rejectCapture = true; },
   denyNextCamera() { denyCamera = true; },
   cameraSettingsCommands: () => cameraSettingsCommands,

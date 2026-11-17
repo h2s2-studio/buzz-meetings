@@ -27,6 +27,9 @@ async fn main() -> Result<()> {
     if let Some(key) = &config.room_proxy_key {
         rooms = rooms.with_proxy_key(key);
     }
+    if let Some(url) = config.transcription_url {
+        rooms = rooms.with_transcriber(url);
+    }
     tracing::info!(addr = %listener.local_addr()?, "Buzz Meetings room service listening");
     axum::serve(listener, router(rooms))
         .with_graceful_shutdown(shutdown())

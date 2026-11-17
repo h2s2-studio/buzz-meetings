@@ -43,6 +43,7 @@ export function workspaceFixturePlugin() {
             case "rename": result = host.rename(viewer, input.base, input.draft); break;
             case "create": result = host.create(viewer, input); break;
             case "canvas": result = host.saveCanvas(viewer, input.id, input.content, input.expected); break;
+            case "agentMessage": result = host.send(input.actor, input.id, input.text); break;
             case "message": result = host.send(viewer, input.id, input.text); break;
             // Explicit fixture controls, reachable only on the local test server.
             case "control":

@@ -28,6 +28,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_INVITES: usize = 128;
 const MAX_HANDSHAKES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 2048;
+const MAX_AUDIO_MESSAGE_BYTES: usize = 440_000;
 const PROXY_KEY_HEADER: &str = "x-buzz-streams-proxy-key";
 
 #[derive(Deserialize)]
@@ -40,6 +41,13 @@ enum Request {
     Join {
         name: String,
         code: String,
+    },
+    Listen {
+        name: String,
+        community: String,
+        room: String,
+        picture: Option<String>,
+        key: Option<String>,
     },
     Meeting {
         name: String,
@@ -56,12 +64,20 @@ enum Reply<'a> {
     Admitted {
         url: &'a str,
         token: String,
+        capabilities: Capabilities,
         #[serde(skip_serializing_if = "Option::is_none")]
         invite: Option<Invite>,
     },
     Error {
         error: &'static str,
     },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Capabilities {
+    screen_audio: bool,
+    transcription: bool,
 }
 
 #[derive(Serialize)]
@@ -84,6 +100,9 @@ pub struct RoomService {
     proxy_key_digest: Option<[u8; 32]>,
     invitations: Mutex<HashMap<String, Room>>,
     handshakes: Arc<Semaphore>,
+    transcription_url: Option<Url>,
+    transcription_jobs: Semaphore,
+    http: reqwest::Client,
 }
 
 impl RoomService {
@@ -96,7 +115,15 @@ impl RoomService {
             proxy_key_digest: None,
             invitations: Mutex::default(),
             handshakes: Arc::new(Semaphore::new(MAX_HANDSHAKES)),
+            transcription_url: None,
+            transcription_jobs: Semaphore::new(4),
+            http: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_transcriber(mut self, url: Url) -> Self {
+        self.transcription_url = Some(url);
+        self
     }
 
     pub fn with_proxy_key(mut self, key: &str) -> Self {
@@ -129,10 +156,17 @@ impl RoomService {
             .lock()
             .map_err(|_| "Room service unavailable.")?;
         invitations.retain(|_, room| room.expires_at > now);
-        let meeting = matches!(&request, Request::Meeting { .. });
+        let meeting = matches!(&request, Request::Meeting { .. } | Request::Listen { .. });
         let mut metadata = None;
         let (name, room_name, invite) = match request {
             Request::Meeting {
+                name,
+                community,
+                room,
+                picture,
+                key,
+            }
+            | Request::Listen {
                 name,
                 community,
                 room,
@@ -221,12 +255,17 @@ impl RoomService {
                 can_subscribe: Some(true),
                 can_publish: Some(true),
                 can_publish_sources: if meeting {
-                    vec!["microphone".into(), "camera".into(), "screen_share".into()]
+                    vec![
+                        "microphone".into(),
+                        "camera".into(),
+                        "screen_share".into(),
+                        "screen_share_audio".into(),
+                    ]
                 } else {
                     vec!["screen_share".into()]
                 },
                 can_publish_data: Some(false),
-                can_update_own_metadata: Some(false),
+                can_update_own_metadata: Some(meeting),
                 ..Default::default()
             })
             .with_room_config(RoomConfiguration {
@@ -252,6 +291,10 @@ impl RoomService {
         Ok(Reply::Admitted {
             url: self.livekit_url.as_str(),
             token,
+            capabilities: Capabilities {
+                screen_audio: meeting,
+                transcription: meeting && self.transcription_url.is_some(),
+            },
             invite,
         })
     }
@@ -281,29 +324,157 @@ async fn upgrade(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let trusted_proxy = rooms.trusted_proxy(&headers);
-    ws.max_message_size(MAX_MESSAGE_BYTES)
-        .max_frame_size(MAX_MESSAGE_BYTES)
+    ws.max_message_size(MAX_AUDIO_MESSAGE_BYTES)
+        .max_frame_size(MAX_AUDIO_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            let _ = timeout(REQUEST_TIMEOUT, admit_socket(socket, rooms, trusted_proxy)).await;
+            admit_socket(socket, rooms, trusted_proxy).await;
         })
 }
 
 async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_proxy: bool) {
-    let Some(Ok(Message::Text(message))) = socket.recv().await else {
+    let Ok(Some(Ok(Message::Text(message)))) = timeout(REQUEST_TIMEOUT, socket.recv()).await else {
         return;
     };
+    if message.len() > MAX_MESSAGE_BYTES {
+        return;
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let reply = serde_json::from_str::<Request>(&message)
+    let request = serde_json::from_str::<Request>(&message);
+    let listening = request
+        .as_ref()
+        .is_ok_and(|request| matches!(request, Request::Listen { .. }));
+    let reply = request
         .map_err(|_| "Invalid room request.")
         .and_then(|request| rooms.admit(request, now.as_millis() as u64, trusted_proxy))
         .unwrap_or_else(|error| Reply::Error { error });
-    if let Ok(text) = serde_json::to_string(&reply) {
+    if listening && matches!(&reply, Reply::Admitted { .. }) {
+        if rooms.transcription_url.is_none() {
+            let _ = socket.send(Message::Text(r#"{"type":"error","error":"Live transcription is not configured on this meeting service."}"#.into())).await;
+        } else {
+            transcribe_socket(&mut socket, &rooms).await;
+        }
+    } else if let Ok(text) = serde_json::to_string(&reply) {
         let _ = socket.send(Message::Text(text.into())).await;
     }
     let _ = socket.send(Message::Close(None)).await;
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AudioChunk {
+    seq: u64,
+    speaker_id: String,
+    speaker_name: String,
+    started_at: u64,
+    ended_at: u64,
+    wav: String,
+}
+
+fn decode_chunk(chunk: &AudioChunk, previous: u64) -> Result<Vec<u8>, &'static str> {
+    if chunk.seq <= previous
+        || chunk.speaker_id.is_empty()
+        || chunk.speaker_id.len() > 128
+        || chunk.speaker_name.len() > 192
+        || chunk.speaker_name.chars().any(char::is_control)
+        || chunk.ended_at <= chunk.started_at
+        || chunk.ended_at - chunk.started_at > 11_000
+        || chunk.wav.len() > 427_000
+    {
+        return Err("Invalid audio segment.");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&chunk.wav)
+        .map_err(|_| "Invalid audio encoding.")?;
+    if !(44..=320_044).contains(&bytes.len()) || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE"
+    {
+        return Err("Expected a bounded WAV segment.");
+    }
+    Ok(bytes)
+}
+
+async fn transcribe_socket(socket: &mut WebSocket, rooms: &RoomService) {
+    let Some(url) = &rooms.transcription_url else {
+        return;
+    };
+    if socket
+        .send(Message::Text(r#"{"type":"listening"}"#.into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let mut previous = 0;
+    while let Ok(Some(Ok(message))) = timeout(Duration::from_secs(90), socket.recv()).await {
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+        if matches!(message, Message::Ping(_) | Message::Pong(_)) {
+            continue;
+        }
+        let Message::Text(text) = message else {
+            break;
+        };
+        if text.as_str() == r#"{"type":"ping"}"# {
+            if socket
+                .send(Message::Text(r#"{"type":"pong"}"#.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
+        let Ok(chunk) = serde_json::from_str::<AudioChunk>(&text) else {
+            break;
+        };
+        let Ok(bytes) = decode_chunk(&chunk, previous) else {
+            break;
+        };
+        previous = chunk.seq;
+        let Ok(_job) = rooms.transcription_jobs.try_acquire() else {
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"error","error":"Transcription is busy. Stop and try again."}"#
+                        .into(),
+                ))
+                .await;
+            break;
+        };
+        let response = timeout(Duration::from_secs(30), async {
+            let mut response = rooms
+                .http
+                .post(url.clone())
+                .header("Content-Type", "audio/wav")
+                .body(bytes)
+                .send()
+                .await?
+                .error_for_status()?;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if bytes.len() + chunk.len() > 24_000 {
+                    return Err(anyhow::anyhow!("Oversized transcript"));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok::<serde_json::Value, anyhow::Error>(serde_json::from_slice(&bytes)?)
+        })
+        .await;
+        let Ok(Ok(value)) = response else {
+            let _ = socket.send(Message::Text(r#"{"type":"error","error":"Speech transcription failed. Stop and try again."}"#.into())).await;
+            break;
+        };
+        let result = serde_json::json!({"type":"transcript", "seq":chunk.seq,"speakerId":chunk.speaker_id,"speakerName":chunk.speaker_name,"startedAt":chunk.started_at,"endedAt":chunk.ended_at,"segments":value.get("segments").unwrap_or(&serde_json::Value::Null)});
+        if socket
+            .send(Message::Text(result.to_string().into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -397,7 +568,7 @@ mod tests {
         assert_eq!(first["video"]["canPublishData"], false);
         assert_eq!(
             first["video"]["canPublishSources"],
-            serde_json::json!(["microphone", "camera", "screen_share"])
+            serde_json::json!(["microphone", "camera", "screen_share", "screen_share_audio"])
         );
         let metadata: serde_json::Value =
             serde_json::from_str(first["metadata"].as_str().unwrap()).unwrap();
@@ -411,6 +582,78 @@ mod tests {
                 .admit(meeting(origin, room, Some("meeting-key")), 0, false)
                 .is_err());
         }
+    }
+
+    #[test]
+    fn speech_and_shared_audio_keep_the_meeting_admission_boundary() {
+        let service = RoomService::new(
+            Url::parse("ws://127.0.0.1:7880").unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-creation-key",
+        );
+        let listen = || Request::Listen {
+            name: "Alex".into(),
+            community: "https://buzz.example.org".into(),
+            room: "General Voice".into(),
+            picture: None,
+            key: None,
+        };
+        assert!(service.admit(listen(), 0, false).is_err());
+        let reply = service.admit(listen(), 0, true).unwrap();
+        let value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(value["capabilities"]["screenAudio"], true);
+        assert_eq!(value["capabilities"]["transcription"], false);
+        let token = claims(reply);
+        assert_eq!(token["video"]["canUpdateOwnMetadata"], true);
+        assert_eq!(token["video"]["canPublishData"], false);
+        let service =
+            service.with_transcriber(Url::parse("http://127.0.0.1:8092/transcribe").unwrap());
+        assert_eq!(
+            serde_json::to_value(service.admit(listen(), 0, true).unwrap()).unwrap()
+                ["capabilities"]["transcription"],
+            true
+        );
+        let quick = service
+            .admit(
+                Request::Create {
+                    name: "Alex".into(),
+                    key: Some("test-creation-key".into()),
+                },
+                0,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&quick).unwrap()["capabilities"]["screenAudio"],
+            false
+        );
+        assert_eq!(
+            claims(quick)["video"]["canPublishSources"],
+            serde_json::json!(["screen_share"])
+        );
+    }
+
+    #[test]
+    fn rejects_replayed_oversized_and_invalid_speech_segments() {
+        let mut wav = vec![0_u8; 44];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        let mut chunk = AudioChunk {
+            seq: 1,
+            speaker_id: "speaker-one".into(),
+            speaker_name: "Same display name".into(),
+            started_at: 1000,
+            ended_at: 2000,
+            wav: base64::engine::general_purpose::STANDARD.encode(wav),
+        };
+        assert!(decode_chunk(&chunk, 0).is_ok());
+        assert!(decode_chunk(&chunk, 1).is_err());
+        chunk.ended_at = 20_000;
+        assert!(decode_chunk(&chunk, 0).is_err());
+        chunk.ended_at = 2000;
+        chunk.wav = "A".repeat(427_001);
+        assert!(decode_chunk(&chunk, 0).is_err());
     }
 
     #[test]

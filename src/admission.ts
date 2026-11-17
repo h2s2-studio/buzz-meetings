@@ -33,6 +33,7 @@ export function requestRoom(broker: string, request: RoomRequest, signal: AbortS
           type: "admitted",
           url: socketUrl(reply.url, false),
           token: reply.token,
+          capabilities: { screenAudio: reply.capabilities?.screenAudio === true, transcription: reply.capabilities?.transcription === true },
           invite: request.type === "create" ? reply.invite : undefined,
         });
       } catch {

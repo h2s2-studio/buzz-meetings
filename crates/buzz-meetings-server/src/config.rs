@@ -9,6 +9,7 @@ pub struct Config {
     pub livekit_api_key: String,
     pub livekit_api_secret: String,
     pub room_creation_key: String,
+    pub transcription_url: Option<Url>,
     pub room_proxy_key: Option<String>,
 }
 
@@ -54,11 +55,29 @@ impl Config {
                 "MEETING_PROXY_KEY must be a separate 64-character hexadecimal key"
             );
         }
+        let transcription_url = env::var("MEETING_TRANSCRIBER_URL")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(|value| Url::parse(&value))
+            .transpose()
+            .context("invalid MEETING_TRANSCRIBER_URL")?;
+        if let Some(url) = &transcription_url {
+            ensure!(
+                url.scheme() == "http"
+                    && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none(),
+                "MEETING_TRANSCRIBER_URL must be a private loopback HTTP endpoint"
+            );
+        }
         Ok(Self {
             bind_addr,
             livekit_url,
             room_creation_key,
             room_proxy_key,
+            transcription_url,
             livekit_api_key: required("LIVEKIT_API_KEY")?,
             livekit_api_secret: required("LIVEKIT_API_SECRET")?,
         })

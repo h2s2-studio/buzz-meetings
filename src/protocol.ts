@@ -12,6 +12,7 @@ export type RoomAdmission = {
   type: "admitted";
   url: string;
   token: string;
+  capabilities?: { screenAudio: boolean; transcription?: boolean };
   invite?: { code: string; expiresAt: number };
 };
 export type RoomReply = RoomAdmission | { type: "error"; error: string };

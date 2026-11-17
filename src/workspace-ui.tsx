@@ -1,15 +1,18 @@
+import type { LiveAgents } from "./live-agents";
+import type { makeRoomSession } from "./room";
 import type * as ReactRuntime from "react";
+import { meetingAgents, type ConversationTarget } from "./agents-ui";
 import { makeWorkspaces, readable, writable, uuid, type Channel, type Storage, type WorkspaceConnection, type Workspaces, type WorkspaceState } from "./workspaces";
 import { pluginId } from "./protocol";
 
 export type PageNavigation = { target: { route?: { params?: unknown }; params?: Readonly<Record<string, string>>; scope?: { viewer: string; communityOrigin: string } | null } };
-export type ConversationProps = { id: string; session: WorkspaceConnection["session"]; scope: string; target: { channelId: string }; label: string };
+export type ConversationProps = { id: string; session: WorkspaceConnection["session"]; scope: string; target: { channelId: string }; label: string; actions?: readonly { label: string; run(): void }[] };
 export type PanelContribution = { id: string; pluginId: string; revision: string; component: ReactRuntime.ComponentType<{ target: string; close(): void; channelContext: { scope: string; channelId: string; channelName: string; viewer: string; relayUrl: string } }> };
 export type WorkspaceContext = {
   react: typeof ReactRuntime; artifactStorage: Storage;
   relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void };
   effect(setup: () => () => void): void;
-  navigation: { open(target: { version: 1; kind: "settings"; section: string } | { version: 1; kind: "page"; pluginId: string; pageId: string; scope: { viewer: string; communityOrigin: string }; route: { version: 1; params: { workspace: string } } }): Promise<unknown> };
+  navigation: { open(target: ConversationTarget | { version: 1; kind: "settings"; section: string } | { version: 1; kind: "page"; pluginId: string; pageId: string; scope: { viewer: string; communityOrigin: string }; route: { version: 1; params: { workspace: string } } }): Promise<unknown> };
   conversation: { ui: { Workspace?: ReactRuntime.ComponentType<ConversationProps> } };
   panels: { snapshot?(): readonly PanelContribution[]; subscribe?(listener: () => void): () => void };
   settingsCards: { register(card: { id: string; title: string; component: ReactRuntime.ComponentType }): void };
@@ -18,8 +21,9 @@ export const validWorkspaceRoute = (params: unknown) => !!params && typeof param
 const empty: WorkspaceState = { workspaces: [], busy: "", error: "", pending: [], loading: true };
 const noPanels: readonly PanelContribution[] = [];
 
-export function workspaceUI(ctx: WorkspaceContext) {
+export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>) {
   const React = ctx.react;
+  const Agents = meetingAgents(ctx, liveAgents, media);
   const { useEffect, useState, useSyncExternalStore } = React;
   let controller: Workspaces | undefined, connection = ctx.relay.snapshot(), stopController = () => {};
   let state = empty, problem = "", proposed = "";
@@ -94,7 +98,7 @@ export function workspaceUI(ctx: WorkspaceContext) {
     const saved = useStateSnapshot();
     const live = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
     const panels = useSyncExternalStore(ctx.panels.subscribe ?? subscribe, ctx.panels.snapshot ?? (() => noPanels));
-    const [surface, setSurface] = useState<"notes" | "chat">("notes");
+    const [surface, setSurface] = useState<"notes" | "chat" | "agents">("notes");
     const params = navigation?.target.route?.params ?? navigation?.target.params;
     const route = validWorkspaceRoute(params) ? (params as { workspace: string }).workspace : undefined;
     const routeScope = navigation?.target.scope;
@@ -109,14 +113,14 @@ export function workspaceUI(ctx: WorkspaceContext) {
     return <section className="meeting-page meeting-workspace-page text-body" data-buzz-ui="" aria-label="Persistent workspace">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><h2>{access ? channel!.name : "Workspace"}</h2><span className="text-caption text-metadata">{access && !writable(channel, live.viewer) ? "Read only" : "Shared workspace"}</span></div></div><div className="panel-header-actions"><Action onClick={() => manage(access ? id : "")}>Workspace settings</Action></div></header>
       {!access ? <div className="meeting-workspace-unavailable" role="status"><p>{live.status !== "ready" ? "Reconnect to load this workspace. Saved content cannot establish current channel access." : saved.loading ? "Loading the saved workspace…" : "This workspace is unavailable. It may still be synchronizing, archived, removed, or outside your current channel access."}</p><Action onClick={() => { void controller?.refresh(); }}>Check workspace</Action></div> : <>
-        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views"><Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action></div>
+        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views"><Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action></div>
         <div className="meeting-workspace-surface" key={`${live.scope}:${id}`}>
-          {surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
+          {surface === "agents" ? <Agents channelId={channel!.id} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
             : Conversation && live.scope ? <Conversation id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
         </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and files stay with this channel after the call. Calls in shared workspaces are coming next.</p>
       </>}{children}
     </section>;
   }
   ctx.settingsCards.register({ id: "workspaces", title: "Meeting workspaces", component: Management });
-  return { Sidebar, Content, useState: useStateSnapshot, manage, open, clear: () => controller?.select(), validRoute: validWorkspaceRoute };
+  return { Agents, Sidebar, Content, useState: useStateSnapshot, manage, open, clear: () => controller?.select(), validRoute: validWorkspaceRoute };
 }

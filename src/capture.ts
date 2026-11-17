@@ -22,7 +22,7 @@ export function untilCanceled<T>(promise: Promise<T>, signal: AbortSignal, dispo
   });
 }
 
-export function captureScreen(_preset: Preset): Promise<MediaStream> {
+export function captureScreen(_preset: Preset, sound = false): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     return Promise.reject(new Error("Screen capture isn’t available in this Buzz installation."));
   }
@@ -30,7 +30,8 @@ export function captureScreen(_preset: Preset): Promise<MediaStream> {
     // Let the native picker return its source before applying quality limits.
     // The same limits are applied to the returned track by limitCapture.
     video: true,
-    audio: false,
+    audio: sound,
+    ...(sound ? { systemAudio: "include" } : {}),
   });
 }
 

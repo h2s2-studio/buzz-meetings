@@ -5,6 +5,8 @@ Buzz channel to keep its notes, conversation, and files available between calls.
 Existing voice rooms support cameras and simultaneous screen sharing through
 the Rust admission server and LiveKit.
 
+> Development branch: live agent listening and task autonomy are described in [Live meeting agents](docs/live-agents.md). They require the updated broker and optional speech service; v0.2.1 does not include them.
+
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
 ## Install in Buzz
@@ -15,8 +17,8 @@ the Rust admission server and LiveKit.
 3. Open **Meetings** in the app dock. Its **Voice Channels** sidebar includes
    **General Voice** automatically.
 4. Click the room to join. Allow microphone permission when your system asks.
-   Your avatar and name appear after connecting. Click **Share screen** to choose
-   a screen or window in the system picker. Use **Watch** to view someone’s
+   Your avatar and name appear after connecting. The screen icon opens sharing
+   settings above the call controls; choose a source in the system picker. Use **Watch** to view someone’s
    stream, or **Watch all screens** for a grid.
 
 Your community must run the [Meetings deployment](docs/deployment.md). By default,
@@ -68,7 +70,7 @@ membership. See [workspace behavior and recovery](docs/persistent-workspaces.md)
   of leaving voice. Balanced and Sharp text presets offer up to 720p/30 and
   1080p/30; a focused viewer can choose available simulcast layers.
 - Switch back to Messages while audio and screen sharing continue. The Buzz
-  toolbar retains return-to-room, mute, deafen, and leave actions.
+  toolbar retains camera, sharing, stop/cancel capture, mute, deafen, and leave actions.
 - Leaving, changing community/identity, or disabling the plugin stops capture
   and remote playback. Reconnecting is shown explicitly.
 - Room chat uses Buzz’s native conversation reader and composer alongside the call.
@@ -91,11 +93,10 @@ are not implemented. Display names and
 avatars are supplied from client Buzz profiles; broker admission uses a deployment
 access key or private proxy, not verified Buzz channel membership. Camera,
 microphone, and screen capture depend on the desktop webview and OS permissions.
-Application/system audio sharing is not implemented in this release.
+The development build can request shared sound when its broker supports it and the webview returns an audio track. It reports when a selected source provides no sound; microphone mute remains separate.
 
 Workspace chat, notes, files, and discovery use Buzz's channel permissions.
-Workspace audio, session history, collaborative whiteboards, transcription, and
-live agents are future work. Existing voice access keys do not authorize private
+Workspace audio, session history, collaborative whiteboards and a permanent transcript archive remain future work. Development live agents use the existing linked voice room and a separate speech worker; see [the live agent guide](docs/live-agents.md). Existing voice access keys do not authorize private
 channel access. The workspace registry requires Buzz's API-v1 artifact storage,
 artifact writer, channel commands, and native Channels contribution, verified
 against Buzz 1.0.4 contracts.
