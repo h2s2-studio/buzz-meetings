@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Voice channels sidebar fixture</title>
+    <style>
+      body { margin: 0; font: 14px system-ui; color: var(--text-standard, #eee); background: var(--surface-base, #151515); }
+      #app { display: grid; grid-template-columns: min(270px, 56vw) minmax(0, 1fr); min-height: 100vh; }
+      nav.buzz-sidebar-navigation { display: block; border-right: 1px solid var(--border-standard, #333); padding: 12px; background: var(--surface-panel, #1a1a1a); }
+      nav section { margin-top: 18px; }
+      nav h2, nav h3 { font-size: 0.95rem; font-weight: 500; margin: 12px 6px 6px; }
+      nav h3 { color: var(--text-secondary, #aaa); }
+      nav header { display: flex; gap: 10px; align-items: center; }
+      nav header span { padding: 5px 8px; }
+      nav header span:first-child { border-radius: 16px; background: var(--interaction-fill, #292929); }
+      nav .fixture-channel { display: flex; gap: 8px; text-align: left; width: 100%; margin: 0; min-width: 0; }
+      main { padding: 20px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./fixture.jsx"></script>
+  </body>
+</html>

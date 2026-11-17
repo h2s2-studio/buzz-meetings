@@ -1,0 +1,10 @@
+{
+  "id": "studio.h2s2.voice-channels",
+  "name": "Voice channels",
+  "apiVersion": 1,
+  "description": "Show voice rooms and recent Huddle participants in the Buzz sidebar.",
+  "discovery": {
+    "category": "communication",
+    "tags": ["huddles", "voice"]
+  }
+}
