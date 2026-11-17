@@ -2,6 +2,6 @@
   "id": "studio.h2s2.meetings",
   "name": "Meetings",
   "apiVersion": 1,
-  "description": "Voice rooms, cameras, and screen sharing in one Meetings app.",
-  "discovery": { "category": "communication", "tags": ["meetings", "voice", "screen-sharing"] }
+  "description": "Shared workspaces, notes, chat, voice rooms, cameras, and screen sharing.",
+  "discovery": { "category": "communication", "tags": ["meetings", "workspaces", "voice", "screen-sharing"] }
 }

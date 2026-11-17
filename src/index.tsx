@@ -3,28 +3,31 @@ import { makeRoomSession, type RoomSnapshot } from "./room";
 import { communityBroker, pluginId, socketUrl } from "./protocol";
 import { presets, type Preset } from "./capture";
 import css from "./meeting.css";
+import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
+import type { Storage, WorkspaceSession } from "./workspaces";
 
 type Profile = { name?: string; picture?: string };
 type ChatChannel = { id: string; name: string; channelType?: string; members?: readonly string[]; huddle?: boolean; parentChannelId?: string; archived?: boolean; cached?: boolean; metadataPending?: boolean };
 const emptyChannels: { channels: readonly ChatChannel[] } = { channels: [] };
 type Connection = { status?: string; origin?: string; viewer?: string; scope?: string;
-  session: { profiles: { snapshot(): ReadonlyMap<string, Profile>; subscribe(listener: () => void): () => void };
+  session: WorkspaceSession & { profiles: { snapshot(): ReadonlyMap<string, Profile>; subscribe(listener: () => void): () => void };
     channels?: { list(): { channels: readonly ChatChannel[] }; subscribeList(listener: () => void): () => void; ensureList?(): void };
     channelCreation?: { available: boolean; create(input: { name: string; visibility: "open" }): Promise<string> };
     media?(url: string, size: "small"): string | undefined } };
 type Context = {
   react: typeof ReactRuntime;
+  artifactStorage: Storage;
   relay: { snapshot(): Connection; subscribe(listener: () => void): () => void };
   effect(setup: () => () => void): void;
-  navigation: { open(target: { version: 1; kind: "plugin"; pluginId: string; pageId: string } | { version: 1; kind: "settings"; section: string }): Promise<unknown> };
+  navigation: { open(target: { version: 1; kind: "plugin"; pluginId: string; pageId: string } | Parameters<WorkspaceContext["navigation"]["open"]>[0]): Promise<unknown> };
   settingsCards: { register(card: { id: string; title: string; component: ReactRuntime.ComponentType }): void };
-  conversation: { ui: { Workspace?: ReactRuntime.ComponentType<{ id: string; session: Connection["session"]; scope: string; target: { channelId: string }; label: string }> } };
+  conversation: WorkspaceContext["conversation"];
   pages: { register(page: { id: string; title: string; primary: boolean; placement: "dock"; layout: "workspace";
-    icon: string; component: ReactRuntime.ComponentType; sidebar: ReactRuntime.ComponentType<{ children?: ReactRuntime.ReactNode }> }): void };
-  panels: { register(panel: { id: string; title: string; matches(target: string): boolean;
+    icon: string; route?: { version: number; validate(params: unknown): boolean }; component: ReactRuntime.ComponentType<{ navigation?: PageNavigation }>; sidebar: ReactRuntime.ComponentType<{ children?: ReactRuntime.ReactNode }> }): void };
+  panels: WorkspaceContext["panels"] & { register(panel: { id: string; title: string; matches(target: string): boolean;
     toolbar: ReactRuntime.ComponentType; component: ReactRuntime.ComponentType }): void };
 };
-export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards", "conversation"];
+export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards", "conversation", "artifactStorage"];
 const glyphs = {
   headphones: "M3 13v-1a9 9 0 0 1 18 0v1M3 13h3v7H3zm18 0h-3v7h3z",
   microphone: "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8",
@@ -54,6 +57,7 @@ function readRooms(key: string) {
 export function apply(ctx: Context) {
   const React = ctx.react;
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
+  const workspaces = workspaceUI(ctx);
   const media = makeRoomSession();
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
@@ -90,9 +94,10 @@ export function apply(ctx: Context) {
     if (!current.viewer || !current.origin || (current.status && current.status !== "ready")) {
       publish("Connect to your community before joining a room."); return;
     }
-    if (media.snapshot().roomName === name && media.snapshot().phase !== "idle") { open(); return; }
+    if (media.snapshot().roomName === name && media.snapshot().phase !== "idle") { workspaces.clear(); open(); return; }
     let service: string;
     try { service = socketUrl(broker); } catch { publish("Set your meeting service address in Connection settings."); return; }
+    workspaces.clear();
     media.leave();
     selected = name;
     publish();
@@ -185,7 +190,7 @@ export function apply(ctx: Context) {
             onClick={() => join(name)}><Icon name="headphones" /><span className="navigation-item-label">{name}</span>{call.roomName === name && <span className="buzz-count-badge">{call.participants.length || "…"}</span>}</button>
           {call.roomName === name && <Roster call={call} />}
         </div>)}
-      </nav>{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" /><div><span>{call.phase === "connected" ? "Voice connected" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
+      </nav><workspaces.Sidebar />{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" /><div><span>{call.phase === "connected" ? "Voice connected" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
     </div>;
   }
   function Video({ stream, label }: { stream: MediaStream; label: string }) {
@@ -284,7 +289,7 @@ export function apply(ctx: Context) {
       finally { setPending(false); }
     }
     return <aside className="meeting-chat" aria-label="Room chat">
-      {chosen && Workspace && current.scope ? <Workspace key={`${current.scope}:${chosen.id}`} id="meetings-room-chat" session={session} scope={current.scope} target={{ channelId: chosen.id }} label={`${room} chat`} />
+      {chosen && Workspace && current.scope ? <><div className="meeting-workspace-link"><Button label="Save as shared workspace" variant="ghost" onClick={() => workspaces.manage(chosen.id)} /></div><Workspace key={`${current.scope}:${chosen.id}`} id="meetings-room-chat" session={session} scope={current.scope} target={{ channelId: chosen.id }} label={`${room} chat`} /></>
         : <><header className="panel-header"><div className="panel-header-label"><Icon name="chat" /><h2>Room chat</h2></div></header><div className="meeting-chat-setup text-body-sm">
           {!Workspace ? <p>Turn on Channels to use Buzz’s room conversation here.</p> : <><p className="text-subtle">Keep the conversation going alongside {room}.</p>
             <label>Room conversation<select className="buzz-input" disabled={pending} value="" onChange={event => link(event.target.value)}><option value="">Choose a joined channel…</option>{channels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label>
@@ -293,8 +298,9 @@ export function apply(ctx: Context) {
         </div></>}
     </aside>;
   }
-  function Page() {
+  function Page({ navigation }: { navigation?: PageNavigation }) {
     const state = useUI(); const call = useCall(); const video = useRef<HTMLDivElement>(null);
+    const workspace = workspaces.useState();
     const [preset, setPreset] = useState<Preset>("balanced"); const [fullscreenError, setFullscreenError] = useState("");
     const [chatOpen, setChatOpen] = useState(true);
     useEffect(() => { visible++; publish(); return () => { visible--; publish(); }; }, []);
@@ -305,6 +311,10 @@ export function apply(ctx: Context) {
       if (element?.requestFullscreen) void element.requestFullscreen().catch(() => setFullscreenError("Fullscreen isn’t available in this window."));
       else setFullscreenError("Fullscreen isn’t available in this window.");
     }
+    const route = navigation?.target.route?.params ?? navigation?.target.params;
+    if (workspace.selected || workspaces.validRoute(route)) return <workspaces.Content navigation={navigation}>
+      {call.phase !== "idle" && <div className="meeting-workspace-callbar"><Button label={`Return to ${call.roomName}`} icon="headphones" variant="ghost" onClick={() => { workspaces.clear(); open(); }} /><Controls call={call} /></div>}
+    </workspaces.Content>;
     return <section className="meeting-page text-body" data-buzz-ui="" aria-label="Meeting">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} participants` : state.selected ? "Voice channel" : ""}</span></div></div>
         <div className="panel-header-actions">{(call.video || call.screens.length > 0) && <Button label="Fullscreen" icon="expand" iconOnly variant="ghost" onClick={fullscreen} />}<Button label={chatOpen ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen} onClick={() => setChatOpen(!chatOpen)} /><Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
@@ -336,6 +346,6 @@ export function apply(ctx: Context) {
   ctx.settingsCards.register({ id: "connection", title: "Meetings", component: Settings });
   ctx.settingsCards.register({ id: "rooms", title: "Voice channels", component: RoomManagement });
   const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="' + glyphs.meetings + '"/></svg>')}`;
-  ctx.pages.register({ id: "meeting", title: "Meetings", primary: true, placement: "dock", icon, layout: "workspace", component: Page, sidebar: Sidebar });
-  ctx.panels.register({ id: "meeting-call", title: "Meeting", matches: () => false, component: Page, toolbar: Toolbar });
+  ctx.pages.register({ id: "meeting", title: "Meetings", primary: true, placement: "dock", icon, layout: "workspace", route: { version: 1, validate: workspaces.validRoute }, component: Page, sidebar: Sidebar });
+  ctx.panels.register({ id: "meeting-call", title: "Meeting", matches: () => false, component: () => <Page />, toolbar: Toolbar });
 }
