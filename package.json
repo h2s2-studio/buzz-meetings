@@ -1,6 +1,6 @@
 {
   "name": "h2s2-buzz-meetings",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "cargo run --locked -p buzz-meetings-server",
-    "test": "node --experimental-strip-types --test test/protocol.test.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
     "test:browser": "playwright test",
     "build": "tsc && node scripts/build.mjs",
     "check:build": "tsc && node scripts/build.mjs --check",

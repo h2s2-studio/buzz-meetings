@@ -1,9 +1,9 @@
 # Buzz Meetings
 
-Voice rooms, cameras, and screen sharing in one Buzz app. Click **General Voice**
-to join audio, see connected participants beneath the room, and share or watch
-screens without copying a separate video invitation. Meetings uses the Rust
-admission server and LiveKit for voice and video.
+Voice rooms and persistent shared workspaces in one Buzz app. Link a permanent
+Buzz channel to keep its notes, conversation, and files available between calls.
+Existing voice rooms support cameras and simultaneous screen sharing through
+the Rust admission server and LiveKit.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
@@ -25,8 +25,29 @@ the room header’s **Connection settings** button and enter its `wss://…/room
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.1.2` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.2.0` for this release, or leave it
 empty to follow main and use **Check for updates**.
+
+## Shared workspaces
+
+1. Choose **+** beside **Workspaces** in the Meetings sidebar.
+2. Link a permanent channel you have joined, or create a workspace. New workspaces
+   default to private; choose **Open to the community** explicitly if wanted.
+3. Open the workspace and use **Notes** or **Chat & files**. Notes use Buzz's
+   native Canvas editor; conversation and attachments use its native chat UI.
+4. Other channel members using Meetings discover the saved workspace through
+   Buzz's artifact synchronization. Owners and admins can rename it in
+   **Workspace settings** without moving its content or changing its identity.
+
+Opening a workspace does not request the microphone. Its content remains in the
+same permanent Buzz channel after closing Meetings or restarting Buzz. Native
+Canvas uses revision checks to preserve conflicting drafts; reload Notes to see
+another person's edits. It does not provide simultaneous document editing.
+
+Shared workspaces and existing voice shortcuts remain separate in this release.
+You can keep an existing call connected while browsing a workspace, but joining
+voice through a workspace awaits admission verified against that channel's
+membership. See [workspace behavior and recovery](docs/persistent-workspaces.md).
 
 ## In a room
 
@@ -52,18 +73,32 @@ empty to follow main and use **Check for updates**.
 
 ## Release boundaries
 
-This first release provides the core room/call workflow; it is not full Discord
-or Teams feature parity. The roster is live for the room you joined. Cross-room
-occupancy and shared room discovery are not implemented. Display names and
+This release provides shared workspace persistence and the core room/call
+workflow; it is not full Discord or Teams feature parity. The roster is live for
+the voice room you joined. Cross-room occupancy and shared voice-room discovery
+are not implemented. Display names and
 avatars are supplied from client Buzz profiles; broker admission uses a deployment
 access key or private proxy, not verified Buzz channel membership. Camera,
 microphone, and screen capture depend on the desktop webview and OS permissions.
 Application/system audio sharing is not implemented in this release.
 
+Workspace chat, notes, files, and discovery use Buzz's channel permissions.
+Workspace audio, session history, collaborative whiteboards, transcription, and
+live agents are future work. Existing voice access keys do not authorize private
+channel access. The workspace registry requires Buzz's API-v1 artifact storage,
+artifact writer, channel commands, and native Channels contribution, verified
+against Buzz 1.0.4 contracts.
+
 The media workflow is exercised against the Rust broker and a real local
 LiveKit instance using synthetic audio/video in Chromium and WebKit. Physical
 microphone, camera, screen capture, and restrictive-network checks remain required
 for your deployment. Native Huddles and its agent voice integration are separate.
+
+Workspace browser checks use two independent identities against a shared test
+service, with explicit stand-ins for Buzz's Canvas and conversation UI. They do
+not replace native two-user testing. A separate authenticated production-relay
+probe verified artifact creation, revision conflicts, head/history reads, and
+idempotent retries; native rendering and synchronization still need smoke checks.
 
 ## Develop
 
