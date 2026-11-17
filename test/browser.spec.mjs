@@ -522,7 +522,7 @@ test("transcribes a room without an agent or linked channel and preserves text a
   for (const [i,client] of [page,other].entries()) client.on("websocket",socket => socket.on("framereceived",frame => {
     try { const value=JSON.parse(frame.payload); if(value.type === "captions") { timelines[i].push(...value.segments.map(row => ({...row,id:`${value.streamId}:${row.seq}`}))); metrics[i]=value.metrics; } } catch { /* Other media frames. */ }
   }));
-  await Promise.all([page.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Alex`), other.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Riley`)]);
+  await Promise.all([page.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Alex`), other.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Riley&profile-name=Alex`)]);
   const roomName = "Unlinked call";
   for (const client of [page, other]) {
     await client.getByRole("button", { name: "Add voice channel", exact: true }).click();
@@ -536,7 +536,10 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   const entries = panel.getByRole("region", { name: "Transcript entries", exact: true });
   await expect(entries).toContainText("Alex", { timeout: 45000 });
-  await expect(entries).toContainText("Riley", { timeout: 45000 });
+  const names=entries.locator(".meeting-transcript-speaker strong");
+  await expect.poll(async()=>new Set(await names.allTextContents()).size,{timeout:45000}).toBe(2);
+  for(const name of await names.allTextContents()) expect(name).toMatch(/^Alex · \S{6,}$/);
+  await expect(stage(page).getByRole("button",{name:/^Show Alex · \S{6,}( \(you\))? on stage$/})).toHaveCount(2);
   await expect(entries).toContainText(/research|notes/i);
   await expect(entries).toContainText(/design|Friday/i);
   await other.getByRole("button",{name:"Show transcript",exact:true}).click();
@@ -577,10 +580,10 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await expect(announcement).toHaveText("");
   await panel.getByRole("button", { name: "Resume transcription", exact: true }).click();
   await expect.poll(() => entries.getByRole("listitem").count(), { timeout: 45000 }).toBeGreaterThan(count);
-  await expect(announcement).toContainText(/Alex:|Riley:/);
+  await expect(announcement).toContainText(/Alex · \S{6,}:/);
   await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Call ended");
-  await expect(entries).toContainText("Riley");
+  await expect(entries).toContainText("Alex");
   expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual(["ended"]);
   await page.evaluate(() => meetingTest.switchCommunity());
   await expect(panel.getByRole("listitem")).toHaveCount(0);

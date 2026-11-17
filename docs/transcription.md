@@ -10,6 +10,10 @@ and start/end times, including overlapping speech. Adding viewers or agents
 reuses the stream. Entries arrive after a pause or roughly eight seconds of
 continued speech. The call shows the service's transcription presence.
 
+People with the same display name get a short source suffix in both the roster
+and transcript. Copy, download, search and speech announcements preserve that
+distinction; the agent always receives the full source ID and timing.
+
 **Pause transcription** detaches this viewer and its agents. Other viewers can
 continue transcribing. Removing an agent leaves transcription running and stops
 its new speech input; native **Stop task** controls work already assigned.

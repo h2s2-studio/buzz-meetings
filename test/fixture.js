@@ -8,7 +8,7 @@ const viewer = ({ Alex: "a", Riley: "b", Sam: "c" }[displayName] || "a").repeat(
 const origin = query.get("relay") || location.origin;
 const host = await fixtureWorkspaceHost({ viewer, realm: query.get("realm") || "default" });
 let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer,
-  session: { ...host.session, profiles: { snapshot: () => new Map([[viewer, { name: displayName, picture: "https://example.com/avatar.png" }]]), subscribe: () => () => {} }, media: () => undefined } };
+  session: { ...host.session, profiles: { snapshot: () => new Map([[viewer, { name: query.get("profile-name") || displayName, picture: "https://example.com/avatar.png" }]]), subscribe: () => () => {} }, media: () => undefined } };
 let meetingOwnerRoot; const sendObservers = new Set();
 const agentTools = new Map(), agentWakes = [], agentInstructions = [];
 const fixtureAgent = { key: "b".repeat(64), pubkey: "b".repeat(64), name: "Research helper", owner: viewer, place: "here" };

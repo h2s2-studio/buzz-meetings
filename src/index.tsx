@@ -9,6 +9,7 @@ import { communityBroker, pluginId, socketUrl } from "./protocol";
 import { presets, type Preset } from "./capture";
 import { audioSettings } from "./audio-settings";
 import { cameraPermissions } from "./permissions";
+import { speakerLabels } from "./speaker-labels";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
 import { readable, type Channel } from "./workspaces";
@@ -230,14 +231,15 @@ export function apply(ctx: Context) {
     const state = useUI();
     const listening = useSyncExternalStore(liveAgents.subscribe, liveAgents.snapshot);
     const agents = includedAgents(call);
+    const personLabel=speakerLabels(call.participants);
     const openAgents = () => { if (call.workspaceChannelId) workspaces.open(call.workspaceChannelId,"agents"); else { showPanel("agents"); open(); } };
     return <><ul className={tiles ? "meeting-tiles" : "meeting-roster"} aria-label={tiles ? "Meeting participants" : "Connected participants"}>
       {call.participants.map(person => <li key={person.id} data-speaking={person.speaking || undefined}>
-        <button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant={state.stageChoice === `person:${person.id}` ? "prominent" : "ghost"} aria-label={`Show ${person.name}${person.local ? " (you)" : ""} on stage`} aria-pressed={state.stageChoice === `person:${person.id}`} onClick={() => chooseStage(`person:${person.id}`)}>
+        <button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant={state.stageChoice === `person:${person.id}` ? "prominent" : "ghost"} aria-label={`Show ${personLabel(person)}${person.local ? " (you)" : ""} on stage`} aria-pressed={state.stageChoice === `person:${person.id}`} onClick={() => chooseStage(`person:${person.id}`)}>
         {tiles && person.video ? <Video stream={person.video} label={`${person.name}’s camera`} /> : <Avatar person={person} large={tiles} />}
-        <span className="meeting-person-name">{person.name}{person.local ? " (you)" : ""}</span></button>
+        <span className="meeting-person-name">{personLabel(person)}{person.local ? " (you)" : ""}</span></button>
         {person.muted && <span className="meeting-muted" title="Muted"><Icon name="microphoneOff" /><span className="sr-only">Muted</span></span>}
-        {!person.local && <ParticipantAudio person={person} />}
+        {!person.local && <ParticipantAudio person={{...person,name:personLabel(person)}} />}
         {call.streams.some(stream => stream.presenterId === person.id) && <span className="meeting-live">Live</span>}
       </li>)}
       {agents.map(agent => <li key={agent.key} className="meeting-agent-roster"><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-avatar" data-large={tiles || undefined} aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button><span className="meeting-live">{agent.phase === "starting" ? "Joining" : "Listening"}</span></li>)}

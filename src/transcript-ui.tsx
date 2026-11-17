@@ -3,6 +3,7 @@ import type { LiveAgents } from "./live-agents";
 import type * as ReactRuntime from "react";
 import type { MeetingTranscription } from "./meeting-transcription";
 import type { makeRoomSession } from "./room";
+import { speakerLabels } from "./speaker-labels";
 
 export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTranscription, media: ReturnType<typeof makeRoomSession>, archive?: { records: MeetingRecords; agents: LiveAgents; channel(roomName: string): string | undefined }) {
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
@@ -18,13 +19,15 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const saved = useSyncExternalStore(archive?.records.subscribe ?? (() => () => {}), archive?.records.snapshot ?? (() => undefined));
     const channelId = archive?.channel(roomName);
     async function copy() { try { await navigator.clipboard.writeText(text()); setNotice("Transcript copied."); } catch { setNotice("Copy is unavailable. Download the transcript instead."); } }
-    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${segments.map(row => `[${new Date(row.startedAt).toLocaleTimeString()}] ${row.speakerName}: ${row.text}`).join("\n\n")}`; }
+    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${segments.map(row => `[${new Date(row.startedAt).toLocaleTimeString()}] ${speaker(row)}: ${row.text}`).join("\n\n")}`; }
     function download() {
       const url = URL.createObjectURL(new Blob([text()],{ type:"text/plain;charset=utf-8" })), link = document.createElement("a");
       link.href=url; link.download=`${roomName.replace(/[^a-z0-9_-]/gi,"_")}-transcript.txt`; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
     }
     const current = state.roomName === roomName;
     const segments = current ? [...state.segments].sort((a, b) => a.startedAt - b.startedAt || a.endedAt - b.endedAt) : [];
+    const label=speakerLabels(segments.map(row=>({id:row.speakerId,name:row.speakerName})));
+    const speaker=(row:typeof segments[number])=>label({id:row.speakerId,name:row.speakerName});
     const active = current && ["starting", "transcribing", "reconnecting"].includes(state.phase);
     const status = !current ? "Off" : state.phase === "starting" ? "Starting…" : state.phase === "transcribing" ? "Transcribing" : state.phase === "reconnecting" ? "Reconnecting…" : state.phase === "ended" ? "Call ended" : state.phase === "error" ? "Interrupted" : state.phase === "paused" ? "Paused" : "Off";
     useEffect(() => {
@@ -33,7 +36,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     useEffect(() => {
       const cursor=state.base+state.segments.length;
       if (!announce || !current || state.callId !== announced.current.callId || cursor < announced.current.cursor) setAnnouncement("");
-      else if (cursor > announced.current.cursor) setAnnouncement(state.segments.slice(Math.max(0,announced.current.cursor-state.base)).map(row=>`${row.speakerName}: ${row.text}`).join(" ").slice(0,2000));
+      else if (cursor > announced.current.cursor) setAnnouncement(state.segments.slice(Math.max(0,announced.current.cursor-state.base)).map(row=>`${speaker(row)}: ${row.text}`).join(" ").slice(0,2000));
       announced.current={callId:state.callId,cursor};
     },[state.segments,state.callId,current,announce]);
     function latest() {
@@ -55,7 +58,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
         following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
         setAway(!following.current);
       }}>
-        {segments.length ? <ol className="meeting-transcript-entries">{segments.filter(segment => !search || `${segment.speakerName} ${segment.text}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map((segment, index) => <li key={`${segment.speakerId}:${segment.startedAt}:${index}`}><div className="meeting-transcript-speaker"><strong>{segment.speakerName}</strong><time dateTime={new Date(segment.startedAt).toISOString()} className="text-caption text-metadata">{new Date(segment.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>{segment.text}</p></li>)}</ol>
+        {segments.length ? <ol className="meeting-transcript-entries">{segments.filter(segment => !search || `${speaker(segment)} ${segment.text}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map((segment, index) => <li key={`${segment.speakerId}:${segment.startedAt}:${index}`}><div className="meeting-transcript-speaker"><strong>{speaker(segment)}</strong><time dateTime={new Date(segment.startedAt).toISOString()} className="text-caption text-metadata">{new Date(segment.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>{segment.text}</p></li>)}</ol>
           : <div className="meeting-transcript-empty"><h3 className="text-body-sm">{active ? "Ready when you speak" : "Follow every voice"}</h3><p className="text-subtle">{active ? "Speech appears here after a short pause, with the speaker and time." : call.phase !== "connected" ? "Join a voice room to see its live transcript." : !call.transcription ? "Transcription isn’t available on this meeting service." : "Start a live transcript for this call. No agent or linked chat is needed."}</p></div>}
       </div>
       {away && <button type="button" className="buzz-button meeting-transcript-latest" data-buzz-ui="" data-variant="subtle" data-size="sm" onClick={latest}><span className="buzz-button-label">Jump to latest</span></button>}
