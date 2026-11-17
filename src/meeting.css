@@ -11,7 +11,8 @@
 .meeting-empty-icon { display: grid; place-items: center; color: var(--text-metadata); margin-bottom: var(--space-2); }
 .meeting-empty-icon svg { width: 2rem; height: 2rem; }
 .meeting-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: var(--space-2); gap: var(--space-4); }
-.meeting-sidebar nav { flex: 1; overflow: auto; }
+.meeting-sidebar > nav[aria-label="Meeting rooms"] { flex: 1; overflow: auto; align-content: start; }
+.meeting-sidebar-pages { flex: 0 0 auto; min-height: 0; }
 .meeting-sidebar form { display: grid; gap: var(--space-2); padding: var(--space-2) var(--space-control-inset); }
 .meeting-sidebar label { display: grid; gap: var(--space-2); }
 .meeting-room { min-width: 0; }
@@ -63,3 +64,16 @@
 .meeting-body[data-chat-open] .meeting-streams > .navigation-item { flex: 1 1 12rem; width: auto; }
 .meeting-body[data-chat-open] .meeting-preview { max-width: 12rem; }
 .meeting-screen-grid { grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); }
+
+.meeting-room-settings { display: grid; gap: var(--space-6); }
+.meeting-room-settings p { margin: 0; }
+.meeting-room-settings label { display: grid; gap: var(--space-2); }
+.meeting-room-create { display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; }
+.meeting-room-create label { flex: 1; min-width: 12rem; }
+.meeting-room-list { padding: var(--space-2); }
+.meeting-room-setting { padding: var(--space-2); }
+.meeting-room-setting + .meeting-room-setting { border-top: 1px solid var(--border-standard); }
+.meeting-room-setting-row { display: flex; align-items: center; gap: var(--space-3); }
+.meeting-room-setting-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.meeting-room-setting form, .meeting-room-removal { display: grid; gap: var(--space-3); padding: var(--space-2); }
+.meeting-setting-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
