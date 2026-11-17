@@ -37,12 +37,15 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     return current.session === run.connection.session && current.scope === run.connection.scope && current.viewer === run.agent.owner && current.status === "ready" && (write ? writable(channel, current.viewer) : readable(channel, current.viewer)) && !!channel?.members?.includes(run.agent.pubkey) && !!current.session.agentChoices?.snapshot().selectable.some(agent => agent.pubkey === run.agent.pubkey && !agent.deleting);
   }
   const currentRun = (run: Session) => active.get(run.agent.pubkey) === run;
+  const released: Session[] = [];
   function stop(error = "", pubkey?: string) {
     for (const run of [...active.values()]) {
       if (pubkey && run.agent.pubkey !== pubkey) continue;
       run.stopped = true; run.abort.abort(); clearInterval(run.timer); run.stopActivity?.(); run.stopAccess?.();
-      active.delete(run.agent.pubkey);
+      active.delete(run.agent.pubkey); released.push(run);
     }
+    // Release only this agent's capture interest; independently requested transcription continues.
+    for (const run of released.splice(0)) transcript.release(`agent:${run.agent.pubkey}`);
     void updateRoster().catch(() => {});
     emit({ error });
   }
@@ -99,7 +102,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     try {
       // Prepare audio on the Start gesture, but only attach the agent after its
       // native owner assignment is confirmed. Transcription has its own lifetime.
-      const startingTranscript = transcript.start();
+      const startingTranscript = transcript.start(`agent:${run.agent.pubkey}`);
       await assign(run);
       if (!currentRun(run) || run.stopped) return;
       await startingTranscript;

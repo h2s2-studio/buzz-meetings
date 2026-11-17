@@ -645,7 +645,8 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   await panel.getByRole("button", { name: "Pause transcription", exact: true }).click();
-  await expect(panel.getByRole("status")).toHaveText("Paused");
+  // Local pause is labelled apart from the capture the second viewer keeps running.
+  await expect(panel.getByRole("status")).toHaveText("Paused for you · others are transcribing this call");
   await expect(stage(other).getByRole("status").filter({ hasText: "Shared transcription active" })).toBeVisible();
   await expect.poll(() => metrics[1].subscribers).toBe(1);
   const count = await entries.getByRole("listitem").count();

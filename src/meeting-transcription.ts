@@ -36,12 +36,15 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
   const listeners = new Set<() => void>();
   let state: MeetingTranscriptState = { phase: "idle", error: "", segments: [], base: 0, warning: "" };
   let active: Run | undefined;
+  // Who asked for capture on this join: "user" or an agent's start attempt. Capture
+  // stops when the last interest is released; an explicit pause clears them all.
+  const interests = new Set<string>();
   function emit(next: Partial<MeetingTranscriptState>) {
     state = { ...state, ...next };
     for (const listener of listeners) listener();
   }
   function stop(error = "", phase: MeetingTranscriptState["phase"] = "paused") {
-    const run = active; active = undefined;
+    const run = active; active = undefined; interests.clear();
     if (run) {
       run.abort.abort(); run.recorder?.close(); run.socket?.close();
       void run.context?.close().catch(() => {});
@@ -53,14 +56,18 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     stop();
     emit({ phase: "idle", joinId: undefined, occurrenceId: undefined, channelId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
   }
-  function start() {
+  function release(holder: string) {
+    if (!interests.delete(holder) || interests.size || !active) return;
+    stop();
+  }
+  function start(holder = "user") {
     const call = media.snapshot();
-    if (active && active.joinId === call.joinId) return active.ready ?? Promise.resolve();
+    if (active && active.joinId === call.joinId) { interests.add(holder); return active.ready ?? Promise.resolve(); }
     if (call.phase !== "connected" || !call.joinId || !call.transcription) {
       emit({ error: call.phase !== "connected" ? "Join a voice room to start transcription." : "Transcription isn’t available on this meeting service." });
       return Promise.resolve();
     }
-    stop();
+    stop(); interests.add(holder);
     let context: AudioContext | undefined;
     try { if (!call.sharedTranscription) context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
     const run: Run = { joinId: call.joinId, abort: new AbortController(), context };
@@ -129,7 +136,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
       if (state.phase !== phase) emit({ phase });
     }
   });
-  return { start, stop, reset, snapshot: () => state,
+  return { start, stop, release, reset, snapshot: () => state, holders: () => [...interests],
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     close() { unsubscribe(); reset(); listeners.clear(); },
   };

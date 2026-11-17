@@ -31,7 +31,10 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const label=speakerLabels(segments.map(row=>({id:row.speakerId,name:row.speakerName})));
     const speaker=(row:typeof segments[number])=>label({id:row.speakerId,name:row.speakerName});
     const active = current && ["starting", "transcribing", "reconnecting"].includes(state.phase);
-    const status = !current ? "Off" : state.phase === "starting" ? "Starting…" : state.phase === "transcribing" ? "Transcribing" : state.phase === "reconnecting" ? "Reconnecting…" : state.phase === "ended" ? "Call ended" : state.phase === "error" ? "Interrupted" : state.phase === "paused" ? "Paused" : "Off";
+    // Separate this person's capture from room-wide capture that others keep running.
+    const othersCapturing = call.phase === "connected" && call.participants.some(person => !person.local && person.transcribing);
+    const local = !current ? "Off" : state.phase === "starting" ? "Starting…" : state.phase === "transcribing" ? "Transcribing" : state.phase === "reconnecting" ? "Reconnecting…" : state.phase === "ended" ? "Call ended" : state.phase === "error" ? "Interrupted" : state.phase === "paused" ? "Paused for you" : "Off";
+    const status = othersCapturing && !["Transcribing", "Starting…", "Reconnecting…"].includes(local) ? `${local} · others are transcribing this call` : local;
     useEffect(() => {
       if (following.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     }, [state.segments]);

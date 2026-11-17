@@ -20,3 +20,28 @@ test("a later call in the same workspace never inherits an earlier call's tasks"
   assert.equal(second.callId, "RM_second"); assert.deepEqual(second.tasks, []);
   flow.close();
 });
+
+test("a failed Add agent releases only the capture it requested", async () => {
+  const flow = meetingFlow();
+  flow.join("RM_empty"); flow.failSend = true;
+  await flow.addAgent();
+  assert.match(flow.agents.snapshot().error, /did not confirm/);
+  assert.equal(flow.transcript.snapshot().phase, "paused");
+  assert.deepEqual(flow.announcements.at(-1), { id: flow.media.snapshot().joinId, value: false });
+  // Transcription the person started themselves survives a failed agent attempt.
+  await flow.transcript.start();
+  await flow.addAgent();
+  assert.equal(flow.transcript.snapshot().phase, "transcribing");
+  assert.deepEqual(flow.transcript.holders(), ["user"]);
+  // A successful agent shares capture; removing it leaves the person's transcript running.
+  flow.failSend = false; await flow.addAgent();
+  assert.equal(flow.agents.snapshot().phase, "listening");
+  flow.agents.stop("", flow.agent.pubkey);
+  assert.equal(flow.transcript.snapshot().phase, "transcribing");
+  // Capture that only an agent requested ends when that agent is removed.
+  flow.transcript.stop(); await flow.addAgent();
+  assert.deepEqual(flow.transcript.holders(), [`agent:${flow.agent.pubkey}`]);
+  flow.agents.stop("", flow.agent.pubkey);
+  assert.equal(flow.transcript.snapshot().phase, "paused");
+  flow.close();
+});
