@@ -37,4 +37,6 @@ npm run test:browser
 
 The plugin uses TypeScript and Buzz’s injected React. The browser fixture exercises the generated module against the desktop sidebar and relay contracts. Releases are published under [H2S2 Studio](https://github.com/h2s2-studio).
 
+For fast local iteration, build the checkout and install it in a development Buzz profile using **Add from folder → Browse**. After rebuilding, use the plugin’s **Reload**, or ask a local Buzz agent to call `plugin_reload` with `studio.h2s2.voice-channels` while **Plugin development** is enabled. [Buzz plugin authoring guide](https://github.com/block/buzz-app/blob/v1.0.4/docs/plugin-authoring-guide.md#workflow)
+
 See other community projects in the [Buzz plugins catalog](https://github.com/h2s2-studio/buzz-plugins).
