@@ -174,6 +174,8 @@ export function apply(ctx: Context) {
     const service = socketUrl(broker), profile = current.session.profiles.snapshot().get(current.viewer);
     media.leave(); stageChoice = "participants"; publish();
     await media.connect(service, { type: "workspace", channel: channel.id, community: current.origin, room: channel.name, name: (profile?.name || "Participant").slice(0,48), picture: profile?.picture }, undefined, workspaceProof(current, ctx.relay.snapshot));
+    const result=media.snapshot();
+    if (result.phase === "idle" && result.error) throw new Error(result.error);
   }
   ctx.effect(() => {
     const style = document.createElement("style"); style.textContent = css; document.head.append(style);
@@ -213,10 +215,21 @@ export function apply(ctx: Context) {
       {source && source !== failed ? <img src={source} alt="" onError={() => setFailed(source)} /> : person.name.slice(0, 1).toLocaleUpperCase()}
     </span>;
   }
+  function includedAgents(call: RoomSnapshot) {
+    const people=[...(liveAgents.snapshot().members ?? []).map(agent=>({...agent,key:agent.sessionId})),...call.participants.filter(person=>!person.local).flatMap(person=>(person.listeners ?? []).map(agent=>({...agent,key:`${person.id}:${agent.pubkey}`,phase:"listening" as const})))];
+    return [...new Map(people.map(agent=>[agent.pubkey,agent])).values()];
+  }
+  function memberCount(call: RoomSnapshot) { return call.participants.length+includedAgents(call).length; }
+  function TranscriptionNotice({call}: {call:RoomSnapshot}) {
+    useSyncExternalStore(liveAgents.subscribe,liveAgents.snapshot);
+    const transcribing=call.participants.filter(person=>person.transcribing), listening=includedAgents(call).filter(agent=>agent.phase!=="starting");
+    if (!call.transcriptActive && !transcribing.length && !listening.length) return null;
+    return <div className="meeting-listener-status text-caption" role="status"><Icon name="transcript" /><span>{call.transcriptActive ? "Shared transcription active" : transcribing.length ? `Live transcription via ${transcribing.map(person=>person.name).join(", ")}` : "Agent listening active"}{listening.length ? ` · ${listening.length} ${listening.length === 1 ? "agent" : "agents"} listening` : ""}</span></div>;
+  }
   function Roster({ call, tiles = false }: { call: RoomSnapshot; tiles?: boolean }) {
     const state = useUI();
     const listening = useSyncExternalStore(liveAgents.subscribe, liveAgents.snapshot);
-    const agents = [...(listening.members ?? []).map(agent => ({ ...agent, key:agent.sessionId })), ...call.participants.filter(person => !person.local).flatMap(person => (person.listeners ?? []).map(agent => ({ ...agent, key:`${person.id}:${agent.pubkey}`, phase:"listening" as const })))];
+    const agents = includedAgents(call);
     const openAgents = () => { if (call.workspaceChannelId) workspaces.open(call.workspaceChannelId,"agents"); else { showPanel("agents"); open(); } };
     return <><ul className={tiles ? "meeting-tiles" : "meeting-roster"} aria-label={tiles ? "Meeting participants" : "Connected participants"}>
       {call.participants.map(person => <li key={person.id} data-speaking={person.speaking || undefined}>
@@ -227,17 +240,18 @@ export function apply(ctx: Context) {
         {!person.local && <ParticipantAudio person={person} />}
         {call.streams.some(stream => stream.presenterId === person.id) && <span className="meeting-live">Live</span>}
       </li>)}
-      {agents.map(agent => <li key={agent.key} className="meeting-agent-roster"><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-avatar" aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button><span className="meeting-live">{agent.phase === "starting" ? "Joining" : "Listening"}</span></li>)}
+      {agents.map(agent => <li key={agent.key} className="meeting-agent-roster"><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-avatar" data-large={tiles || undefined} aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button><span className="meeting-live">{agent.phase === "starting" ? "Joining" : "Listening"}</span></li>)}
     </ul>{!tiles && call.phase === "connected" && <Button label="Add agent" icon="plus" onClick={openAgents} />}</>;
   }
   function ParticipantAudio({ person }: { person: RoomSnapshot["participants"][number] }) {
     const id = useId(), [value,setValue] = useState(Math.round(media.volume(person.id)*100));
-    return <><Button label={`Audio for ${person.name}`} icon="headphones" iconOnly variant="ghost" popoverTarget={id} /><div id={id} popover="auto" className="meeting-participant-audio text-body-sm" role="dialog" aria-label={`${person.name} audio`}><label>{person.name} volume<input type="range" min="0" max="100" value={value} aria-label={`${person.name} volume`} onChange={event => { const next = Number(event.target.value); setValue(next); media.setVolume(person.id,next/100); }} /></label><span className="text-caption">{value}%</span><Button label="Close participant audio" icon="close" iconOnly variant="ghost" popoverTarget={id} popoverTargetAction="hide" /></div></>;
+    return <span className="meeting-person-audio"><Button label={`Audio for ${person.name}`} icon="headphones" iconOnly variant="ghost" popoverTarget={id} /><div id={id} popover="auto" className="meeting-participant-audio text-body-sm" role="dialog" aria-label={`${person.name} audio`}><label>{person.name} volume<input type="range" min="0" max="100" value={value} aria-label={`${person.name} volume`} onChange={event => { const next = Number(event.target.value); setValue(next); media.setVolume(person.id,next/100); }} /></label><span className="text-caption">{value}%</span><Button label="Close participant audio" icon="close" iconOnly variant="ghost" popoverTarget={id} popoverTargetAction="hide" /></div></span>;
   }
   function SharingControl({ call }: { call: RoomSnapshot }) {
     const state = useUI();
     const id = useId(); const drawer = useRef<HTMLDivElement>(null); const trigger = useRef<HTMLDivElement>(null);
     const [expanded, setExpanded] = useState(false);
+    useEffect(() => { if (call.sharing?.preview && !call.sharing.soundError) drawer.current?.hidePopover(); }, [call.sharing?.preview, call.sharing?.soundError]);
     useEffect(() => {
       const element = drawer.current;
       if (!element) return;
@@ -292,24 +306,24 @@ export function apply(ctx: Context) {
   }
   function Sidebar({ children }: { children?: ReactRuntime.ReactNode }) {
     const state = useUI(); const call = useCall();
-    const [adding, setAdding] = useState(false); const [name, setName] = useState("");
+    const [adding, setAdding] = useState(false); const [name, setName] = useState(""), [issue,setIssue]=useState("");
+    const addTrigger=useRef<HTMLButtonElement>(null);
+    function closeAdd() { setAdding(false); setName(""); setIssue(""); addTrigger.current?.focus(); }
     function add(event: ReactRuntime.FormEvent) {
       event.preventDefault(); const value = validName(name);
-      if (!value || value.length > 64 || /[\p{Cc}]/u.test(value)) return;
-      if (!rooms.some(room => roomKey(room) === roomKey(value)) && rooms.length < 32) {
-        saveRooms([...rooms, value]);
-      }
-      setName(""); setAdding(false);
+      const problem=nameError(value) || (rooms.length>=32 ? "You can save up to 32 voice channels on this device." : "");
+      if (problem) { setIssue(problem); return; }
+      saveRooms([...rooms, value]); closeAdd();
     }
     return <div className="shell-sidebar-default meeting-sidebar" data-buzz-ui="">
-      <div className="meeting-sidebar-pages">{children}</div><nav className="navigation-section" aria-label="Meeting rooms"><header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Voice Channels</h2><span className="navigation-section-heading-actions"><Button label="Manage voice channels" icon="settings" iconOnly variant="ghost" onClick={openManagement} /><Button label="Add voice channel" icon="plus" iconOnly variant="ghost" disabled={state.rooms.length >= 32} onClick={() => setAdding(!adding)} /></span></header>
-        {adding && <form onSubmit={add}><label>Room name<input className="buzz-input" value={name} maxLength={64} autoFocus onChange={event => setName(event.target.value)} /></label><Button label="Add room" onClick={add} /></form>}
+      <div className="meeting-sidebar-pages">{children}</div><div className="meeting-sidebar-navigation"><workspaces.Sidebar /><nav className="navigation-section" aria-label="Meeting rooms"><header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Quick rooms</h2><span className="navigation-section-heading-actions"><Button label="Manage voice channels" icon="settings" iconOnly variant="ghost" onClick={openManagement} /><Button ref={addTrigger} label="Add voice channel" icon="plus" iconOnly variant="ghost" disabled={state.rooms.length >= 32} onClick={() => { if(adding) closeAdd(); else setAdding(true); }} /></span></header>
+        {adding && <form onSubmit={add} onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();closeAdd();}}}><label>Room name<input className="buzz-input" value={name} maxLength={64} autoFocus onChange={event => {setName(event.target.value);setIssue("");}} /></label>{issue && <p role="alert" className="text-caption text-danger">{issue}</p>}<div className="meeting-setting-actions"><Button label="Cancel adding room" variant="ghost" onClick={closeAdd} /><Button label="Add room" onClick={add} /></div></form>}
         {state.rooms.map(name => <div className="meeting-room" key={name}>
           <button type="button" className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={call.roomName === name || undefined} aria-label={`Join ${name}`} aria-current={call.roomName === name ? "true" : undefined}
-            onClick={() => join(name)}><Icon name="headphones" /><span className="navigation-item-label">{name}</span>{call.roomName === name && <span className="buzz-count-badge">{call.participants.length || "…"}</span>}</button>
+            onClick={() => join(name)}><Icon name="headphones" /><span className="navigation-item-label">{name}</span>{call.roomName === name && <span className="buzz-count-badge">{memberCount(call) || "…"}</span>}</button>
           {call.roomName === name && <Roster call={call} />}
         </div>)}
-      </nav><workspaces.Sidebar />{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" /><div><span>{call.phase === "connected" ? "Voice connected" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
+      </nav></div>{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" data-connected={call.phase === "connected" || undefined} /><div><span>{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
     </div>;
   }
   function Video({ stream, label }: { stream: MediaStream; label: string }) {
@@ -376,7 +390,7 @@ export function apply(ctx: Context) {
       <div className="buzz-settings-group meeting-room-list">
         {state.rooms.length === 0 && <p className="text-subtle">No voice channels saved. Create one above to get started.</p>}
         {state.rooms.map(name => <div className="meeting-room-setting" key={name}>
-          {editing?.original === name ? <form onSubmit={rename}><label>New channel name<input className="buzz-input" autoFocus value={editing.name} maxLength={64} onChange={event => setEditing({ original: name, name: event.target.value })} /></label><p className="text-caption text-metadata">The new name selects a different voice room. Your linked text conversation stays the same.{call.roomName === name ? " Your current call will end." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel rename" variant="ghost" onClick={() => { setEditing(undefined); setError(""); }} /><Button label="Save channel name" onClick={rename} /></div></form>
+          {editing?.original === name ? <form onSubmit={rename}><label>New channel name<input className="buzz-input" autoFocus value={editing.name} maxLength={64} onChange={event => setEditing({ original: name, name: event.target.value })} /></label><p className="text-caption text-metadata">The new name selects a different voice room. Your linked text conversation stays the same.{call.roomName === name ? " Your current call will end." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel rename" variant="ghost" onClick={() => { setEditing(undefined); setError(""); }} /><Button label={call.roomName === name ? "Leave and rename" : "Save channel name"} onClick={rename} /></div></form>
             : <div className="meeting-room-setting-row"><Icon name="headphones" /><span>{name}</span><Button label={`Rename ${name}`} icon="settings" iconOnly variant="ghost" onClick={() => { setEditing({ original: name, name }); setRemoving(undefined); setError(""); }} /><Button label={`Remove ${name}`} icon="remove" iconOnly variant="ghost" onClick={() => { setRemoving(name); setEditing(undefined); setError(""); }} /></div>}
           {removing === name && <div className="meeting-room-removal" role="group" aria-label={`Remove ${name} shortcut`}><p>Remove this shortcut? Its text conversation and other participants are unaffected.{call.roomName === name ? " You will leave the current call." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel removal" variant="ghost" onClick={() => setRemoving(undefined)} /><Button label="Remove channel shortcut" danger onClick={() => remove(name)} /></div></div>}
         </div>)}
@@ -444,19 +458,15 @@ export function apply(ctx: Context) {
     const workspace = workspaces.useState();
     const chatOpen = state.chatOpen;
     useEffect(() => { visible++; publish(); return () => { visible--; publish(); }; }, []);
-    const connected = call.phase === "connected";
     const route = navigation?.target.route?.params ?? navigation?.target.params;
     if (workspace.selected || workspaces.validRoute(route)) return <workspaces.Content navigation={navigation}>
-      {call.phase !== "idle" && <div className="meeting-workspace-callbar"><Button label={`Return to ${call.roomName}`} icon="headphones" variant="ghost" onClick={() => { workspaces.clear(); open(); }} /><Controls call={call} /></div>}
+      {call.phase !== "idle" && <><TranscriptionNotice call={call} /><div className="meeting-workspace-callbar"><Button label={`Return to ${call.roomName}`} icon="headphones" variant="ghost" onClick={() => { workspaces.clear(); open(); }} /><Controls call={call} /></div></>}
     </workspaces.Content>;
     return <section className="meeting-page text-body" data-buzz-ui="" aria-label="Meeting">
-      <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} participant${call.participants.length === 1 ? "" : "s"}` : state.selected ? "Voice channel" : ""}</span></div></div>
-        <div className="panel-header-actions"><Button ref={transcriptTrigger} label={chatOpen && state.roomPanel === "transcript" ? "Hide transcript" : "Show transcript"} icon="transcript" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "transcript"} onClick={() => { if (chatOpen && state.roomPanel === "transcript") setChatOpen(false); else showPanel("transcript"); }} /><Button label="Meeting agents" icon="agent" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "agents"} onClick={() => { if (chatOpen && state.roomPanel === "agents") setChatOpen(false); else showPanel("agents"); }} /><Button label={chatOpen && state.roomPanel === "chat" ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "chat"} onClick={() => { if (chatOpen && state.roomPanel === "chat") setChatOpen(false); else showPanel("chat"); }} />{call.phase === "idle" && <audio.AudioSettings />}<Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
+      <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} ${call.participants.length === 1 ? "person" : "people"}${includedAgents(call).length ? ` · ${includedAgents(call).length} ${includedAgents(call).length === 1 ? "agent" : "agents"}` : ""}` : state.selected ? "Voice channel" : ""}</span></div></div>
+        <div className="panel-header-actions"><Button ref={transcriptTrigger} label={chatOpen && state.roomPanel === "transcript" ? "Hide transcript" : "Show transcript"} icon="transcript" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "transcript"} onClick={() => { if (chatOpen && state.roomPanel === "transcript") setChatOpen(false); else showPanel("transcript"); }} /><Button label="Meeting agents" icon="agent" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "agents"} onClick={() => { if (chatOpen && state.roomPanel === "agents") setChatOpen(false); else showPanel("agents"); }} /><Button label={chatOpen && state.roomPanel === "chat" ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "chat"} onClick={() => { if (chatOpen && state.roomPanel === "chat") setChatOpen(false); else showPanel("chat"); }} />{call.phase === "idle" && <audio.AudioSettings />}</div>
       </header>
-      {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span>{!call.cameraDenied && <Button label="Connection settings" variant="ghost" onClick={openSettings} />}</div>}
-      {call.cameraDenied && connected && <CameraAccess />}
-      {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
-      {(call.transcriptActive || call.participants.some(person => person.transcribing || person.listener)) && <div className="meeting-listener-status text-caption" role="status"><Icon name="transcript" />{call.transcriptActive && <span>Shared transcription active</span>}{call.participants.some(person => person.transcribing) && <span>Live transcription via {call.participants.filter(person => person.transcribing).map(person => person.name).join(", ")}</span>}{call.participants.some(person => person.listener) && <span>{call.participants.filter(person => person.listener).map(person => `${person.listener} is listening via ${person.name}`).join(" · ")}</span>}</div>}
+      {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span>{state.error && <Button label="Connection settings" variant="ghost" onClick={openSettings} />}</div>}
       <MeetingBody closePanel={() => { setChatOpen(false); transcriptTrigger.current?.focus(); }} />
     </section>;
   }
@@ -472,6 +482,9 @@ export function apply(ctx: Context) {
     const localScreen = stageChoice === "your-screen" && call.sharing, remoteScreen = stageChoice.startsWith("screen:") && call.video;
     const allScreens = stageChoice === "all-screens" && call.screens.length > 0;
     return <>{/* The stage and controls share ownership across all meeting views. */}
+      <TranscriptionNotice call={call} />
+      {call.cameraDenied && connected && <CameraAccess />}
+      {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
       <div className="meeting-body" data-chat-open={(chatOpen && !!(call.roomName || state.selected)) || undefined}><div className="meeting-content">
         <div className="meeting-stage" ref={video}>
           {localScreen ? <div className="meeting-focused-screen"><Video stream={localScreen.preview} label="Your screen on stage" /></div>
@@ -487,7 +500,7 @@ export function apply(ctx: Context) {
           {call.streams.map(stream => <button className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={stageChoice === `screen:${stream.id}` || undefined} type="button" key={stream.id} aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={stageChoice === `screen:${stream.id}`} disabled={!connected} onClick={() => chooseStage(`screen:${stream.id}`)}><Icon name="screen" /><span className="navigation-item-label">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></button>)}
         </aside>}
       </div>{chatOpen && !!(call.roomName || state.selected) && (state.roomPanel === "transcript" ? <Transcript roomName={call.roomName || state.selected} close={() => { if (closePanel) closePanel(); else setChatOpen(false); }} /> : <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />)}</div>
-      {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call} /></footer>}
+      {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" data-connected={call.phase === "connected" || undefined} /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call} /></footer>}
     </>;
   }
   function Toolbar() {

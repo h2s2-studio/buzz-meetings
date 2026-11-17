@@ -61,13 +61,50 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
   function Action({ children, ...props }: ReactRuntime.ButtonHTMLAttributes<HTMLButtonElement>) {
     return <button {...props} type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" data-disabled={props.disabled || undefined}><span className="buzz-button-label">{children}</span></button>;
   }
+  function CreateMeeting() {
+    const saved=useStateSnapshot(), id=React.useId(), trigger=React.useRef<HTMLButtonElement>(null), dialog=React.useRef<HTMLDivElement>(null), nameInput=React.useRef<HTMLInputElement>(null);
+    const [name,setName]=useState("");
+    async function create(event: ReactRuntime.FormEvent) {
+      event.preventDefault(); const owner=controller;
+      if (!owner || saved.busy || !name.trim()) return;
+      await owner.create(name,"private");
+      if (controller !== owner) return;
+      const result=owner.snapshot();
+      if (!result.error && !result.creation && result.selected) { dialog.current?.hidePopover(); setName(""); open(result.selected); }
+    }
+    function position() {
+      const anchor=trigger.current?.getBoundingClientRect(), element=dialog.current; if (!anchor || !element) return;
+      element.style.left=`${Math.max(12,Math.min(innerWidth-352,anchor.left))}px`;
+      element.style.top=`${Math.max(12,Math.min(innerHeight-280,anchor.bottom+8))}px`;
+      element.style.maxHeight=`${innerHeight-36}px`;
+    }
+    function dismiss() { dialog.current?.hidePopover(); trigger.current?.focus(); }
+    useEffect(() => {
+      const element=dialog.current; if (!element) return;
+      const focusName=()=>{if(element.matches(":popover-open")) nameInput.current?.focus();};
+      element.addEventListener("toggle",focusName); return ()=>element.removeEventListener("toggle",focusName);
+    },[]);
+    useEffect(() => { setName(""); dialog.current?.hidePopover(); },[connection.scope]);
+    return <><button ref={trigger} type="button" className="buzz-button" data-buzz-ui="" data-button-shape="icon" data-icon-size="sm" data-icon-shape="control" data-icon-variant="ghost" aria-label="Create meeting" title="Create meeting" popoverTarget={id} onClick={position}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+      <div ref={dialog} id={id} popover="auto" className="meeting-create-dialog text-body-sm" role="dialog" aria-label="Create meeting" data-buzz-ui="" onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();dismiss();}}}>
+        <form onSubmit={event=>{void create(event);}}>
+          <header><h3 className="text-body-sm">Create meeting</h3><button type="button" className="buzz-button" data-buzz-ui="" onClick={dismiss} aria-label="Close create meeting">×</button></header>
+          <label>Meeting name<input ref={nameInput} className="buzz-input" value={name} maxLength={64} disabled={!!saved.busy} onChange={event=>setName(event.target.value)} /></label>
+          <p className="text-caption text-subtle">Private by default. Invite people through its channel when you’re ready.</p>
+          <button type="submit" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="prominent" disabled={!!saved.busy || !!saved.creation || !name.trim()}>{saved.busy || "Create meeting"}</button>
+          {saved.error && <p role="alert" className="text-danger">{saved.error}</p>}{saved.creation && <p className="text-caption text-subtle">A previous creation needs checking in meeting settings.</p>}
+          <Action onClick={()=>{dialog.current?.hidePopover();manage();}}>Link an existing channel or change settings</Action>
+        </form>
+      </div>
+    </>;
+  }
   function Sidebar() {
     const current = useStateSnapshot();
     const call = useSyncExternalStore(media?.subscribe ?? subscribe, media?.snapshot ?? (() => undefined));
     return <nav className="navigation-section meeting-workspace-navigation" aria-label="Shared workspaces">
-      <header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Workspaces</h2><span className="navigation-section-heading-actions"><Action aria-label="Manage workspaces" onClick={() => manage()}>+</Action></span></header>
+      <header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Meetings</h2><span className="navigation-section-heading-actions"><Action aria-label="Manage workspaces" onClick={() => manage()}>⋯</Action><CreateMeeting /></span></header>
       {current.workspaces.map(channel => <React.Fragment key={channel.id}><button key={channel.id} className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={current.selected === channel.id || undefined} aria-current={current.selected === channel.id ? "page" : undefined} type="button" onClick={() => open(channel.id)}><span className="navigation-item-label">{channel.name}</span></button>{voice && call?.workspaceChannelId === channel.id && call.phase !== "idle" && <voice.Roster />}</React.Fragment>)}
-      {!current.workspaces.length && <p className="meeting-workspace-hint text-caption text-metadata">{current.loading ? "Loading workspaces…" : "Link a channel to keep its chat, notes and files here."}</p>}
+      {!current.workspaces.length && <p className="meeting-workspace-hint text-caption text-metadata">{current.loading ? "Loading workspaces…" : "Create a meeting to keep voice, chat and notes together."}</p>}
       {current.pending.length > 0 && <Action onClick={() => manage()}>Review {current.pending.length} saved {current.pending.length === 1 ? "link" : "links"}</Action>}
       {(current.error || current.syncError) && <p className="meeting-workspace-hint text-caption text-danger" role="status">{current.error || current.syncError}</p>}
     </nav>;
@@ -127,6 +164,7 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const canEnable = !!live.session.memberAdditions && ["owner","admin"].includes(channel?.viewerRole ?? "");
     async function joinVoice() {
       if (!voice || !channel || joining) return;
+      const previous=surface;
       setJoining(true); setVoiceError("");
       try {
         if (!enabled) {
@@ -134,8 +172,10 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
           await live.session.memberAdditions.add(channel.id, service.identity, { role: "guest" });
         }
         if (ctx.relay.snapshot().session !== live.session) return;
-        await voice.join(channel); setSurface("call");
-      } catch (problem) { setVoiceError(problem instanceof Error ? problem.message : "Couldn’t join workspace voice."); }
+        await voice.join(channel);
+        const activeCall=media?.snapshot();
+        setSurface(activeCall?.workspaceChannelId === channel.id && activeCall.phase !== "idle" ? "call" : previous);
+      } catch (problem) { setSurface(previous); setVoiceError(problem instanceof Error ? problem.message : "Couldn’t join workspace voice."); }
       finally { setJoining(false); }
     }
     const Canvas = panels.find(panel => panel.id === "canvas" && panel.pluginId === "buzz.channels")?.component;

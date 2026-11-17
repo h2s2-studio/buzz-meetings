@@ -98,6 +98,8 @@ export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapsh
       catch (problem) { setError(problem instanceof Error ? problem.message : "Couldn’t stop this task. Open the conversation’s Activity controls."); }
       finally { setBusy(false); }
     }
+    const available = candidates.filter(item=>!listening.members?.some(member=>member.pubkey===item.pubkey && member.channelId===channelId));
+    const unavailable = available.filter(item=>!liveAgents?.eligible(item.pubkey));
     const name = (pubkey: string) => candidates.find(item => item.pubkey === pubkey)?.name ?? "Agent";
     return <section className="meeting-agents text-body-sm" aria-label="Meeting agents" data-buzz-ui="">
       <header><h3 className="text-body-sm">Agents in this call</h3><Action disabled={!access} onClick={() => open("members")}>Manage access</Action></header>
@@ -109,10 +111,11 @@ export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapsh
         {listening.error && <p role="alert" className="text-danger">{listening.error}</p>}
         <div className="meeting-agent-chooser" aria-label="Add agent to call">
           {!roomName || call.phase !== "connected" ? <p className="text-caption text-subtle">Join voice to add a listening agent. You can send a written task below.</p> : !call.transcription ? <p className="text-caption text-subtle">Transcription needs to be available before an agent can listen.</p> : <p className="text-caption text-subtle">Add an agent, then speak naturally to give it work.</p>}
-          {candidates.filter(item => !listening.members?.some(member => member.pubkey === item.pubkey && member.channelId === channelId)).map(item => {
+          {available.filter(item=>liveAgents?.eligible(item.pubkey)).map(item => {
             const member = !!channel?.members?.includes(item.pubkey), ready = !!liveAgents?.eligible(item.pubkey);
             return <div className="meeting-agent-choice" key={item.pubkey}><div><strong>{item.name}</strong><p className="text-caption text-metadata">{!ready ? "Needs to be one of your agents running on this device" : !member ? "Adding also gives access to this channel’s history, notes and files" : "Ready to listen and carry out tasks"}</p></div><Action aria-label={`Add ${item.name} to call`} disabled={busy || !ready || !roomName || call.phase !== "connected" || call.roomName !== roomName || !call.transcription || !writable(channel, live.viewer) || (!member && !session.memberAdditions) || !mission.trim()} onClick={() => { void add(item); }}>Add</Action></div>;
           })}
+          {unavailable.length > 0 && <details className="meeting-unavailable-agents"><summary>Unavailable agents ({unavailable.length})</summary>{unavailable.map(item=><p className="text-caption text-subtle" key={item.pubkey}><strong>{item.name}</strong> · Needs to be one of your agents running on this device</p>)}</details>}
           {!candidates.length && <p className="text-caption text-metadata">{choices.pending ? "Loading agents…" : "No agents are available. Create and start an agent in Buzz to bring it here."}</p>}
         </div>
         <details className="meeting-agent-preferences"><summary>Agent settings</summary><label>Live role<select className="buzz-input" aria-label="Live role" value={liveMode} onChange={event => setLiveMode(event.target.value as "act" | "assist")}><option value="act">Create and carry out tasks</option><option value="assist">Take notes and propose tasks</option></select></label><label>Agent mission<textarea className="buzz-input" aria-label="Agent mission" rows={3} value={mission} maxLength={4000} onChange={event => setMission(event.target.value)} /></label><p className="text-caption text-metadata">Applies when you add an agent. Removing an agent stops new speech input; use Stop task for work already running.</p></details>

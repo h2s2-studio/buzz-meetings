@@ -13,7 +13,8 @@ let meetingOwnerRoot; const sendObservers = new Set();
 const agentTools = new Map(), agentWakes = [], agentInstructions = [];
 const fixtureAgent = { key: "b".repeat(64), pubkey: "b".repeat(64), name: "Research helper", owner: viewer, place: "here" };
 const runtimeAgents = [fixtureAgent, ...(query.has("multi-agents") ? [{ ...fixtureAgent,key:"d".repeat(64),pubkey:"d".repeat(64),name:"New helper" }] : [])];
-const nativeAgents = { snapshot: () => ({ agents: runtimeAgents, running: runtimeAgents }), subscribe: () => () => {}, wake(key, input) { agentWakes.push({ key, ...input }); }, addInstructions(input) { agentInstructions.push(input); }, addTool(tool) { agentTools.set(tool.name, tool); } };
+const runtimeListeners=new Set(); let runtimeRunning=true;
+const nativeAgents = { snapshot: () => ({ agents: runtimeAgents, running: runtimeRunning ? runtimeAgents : [] }), subscribe: fn => {runtimeListeners.add(fn);return ()=>runtimeListeners.delete(fn);}, wake(key, input) { agentWakes.push({ key, ...input }); }, addInstructions(input) { agentInstructions.push(input); }, addTool(tool) { agentTools.set(tool.name, tool); } };
 const navigationTargets = [], taskRequests = [], agentListeners = new Set();
 let agentActivity = { status: "listening", turns: [], local: [] };
 if (query.has("agents")) {
@@ -150,6 +151,7 @@ apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : native
   effect(setup) { cleanups.push(setup()); },
 });
 window.meetingTest = {
+  setAgentRunning(value) { runtimeRunning=value; for(const fn of runtimeListeners) fn(); },
   agentWakes: () => agentWakes,
   async callAgentTool(name, args, overrides = {}) {
     const client = { key: fixtureAgent.key, pubkey: fixtureAgent.pubkey, owner: viewer, signal: new AbortController().signal, async publish(event) { await host.request("agentMessage", { actor: fixtureAgent.pubkey, id: event.tags.find(tag => tag[0] === "h")[1], text: event.content }); return { id: "f".repeat(64) }; }, ...overrides.client };

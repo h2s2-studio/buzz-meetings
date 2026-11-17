@@ -25,8 +25,9 @@ that agent through its native client. These calls do not borrow the owner's
 signer. Native Activity shows actual execution and provides Stop controls.
 
 **Remove** ends new agent input and notifications while the call’s
-transcription continues. **Pause transcription** stops this device’s capture and
-also ends live-agent input. Neither action cancels tasks already running; use
+transcription continues. **Pause transcription** detaches this viewer and
+also ends its live-agent input. Other viewers can keep the shared stream running.
+Neither action cancels tasks already running; use
 **Stop task** for those. Leaving voice, changing community or disabling Meetings
 stops transcription. Losing channel/agent access stops the agent without stopping
 the call’s independent transcript. The listener requires this Buzz
@@ -38,8 +39,9 @@ The optional Compose `speech` profile runs faster-whisper on CPU, using the
 English `base.en` model by default. The default model revision is pinned. Models
 and language can be changed in the private speech service configuration. No
 external transcription account is required; initial model download is from
-Hugging Face, and inference runs on your machine. The broker forwards bounded
-16 kHz mono WAV segments over loopback. Audio and live transcript buffers are
+Hugging Face, and inference runs on your service machine. One service RTC participant
+subscribes to separate 16 kHz mono microphone tracks per call. Recognition and
+control requests stay private to the broker/worker. Audio and live transcript buffers are
 held in memory. Task posts and agent results remain in native Buzz chat; saved snapshots can retain the current transcript in channel artifacts.
 
 Segments close after a pause or roughly eight seconds of continued speech.

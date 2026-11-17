@@ -6,10 +6,14 @@ import type { makeRoomSession } from "./room";
 
 export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTranscription, media: ReturnType<typeof makeRoomSession>, archive?: { records: MeetingRecords; agents: LiveAgents; channel(roomName: string): string | undefined }) {
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
+  let announceByDefault=false;
+  try { announceByDefault=localStorage.getItem("meetings-announce-speech")==="true"; } catch { /* Default to quiet reading. */ }
   return function TranscriptPanel({ roomName, close }: { roomName: string; close(): void }) {
     const state = useSyncExternalStore(transcript.subscribe, transcript.snapshot);
     const call = useSyncExternalStore(media.subscribe, media.snapshot);
     const scroll = useRef<HTMLDivElement>(null), following = useRef(true);
+    const [announce,setAnnounce]=useState(announceByDefault), [announcement,setAnnouncement]=useState("");
+    const announced=useRef({callId:state.callId,cursor:state.base+state.segments.length});
     const [away, setAway] = useState(false), [search, setSearch] = useState(""), [notice, setNotice] = useState("");
     const saved = useSyncExternalStore(archive?.records.subscribe ?? (() => () => {}), archive?.records.snapshot ?? (() => undefined));
     const channelId = archive?.channel(roomName);
@@ -26,6 +30,12 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     useEffect(() => {
       if (following.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     }, [state.segments]);
+    useEffect(() => {
+      const cursor=state.base+state.segments.length;
+      if (!announce || !current || state.callId !== announced.current.callId || cursor < announced.current.cursor) setAnnouncement("");
+      else if (cursor > announced.current.cursor) setAnnouncement(state.segments.slice(Math.max(0,announced.current.cursor-state.base)).map(row=>`${row.speakerName}: ${row.text}`).join(" ").slice(0,2000));
+      announced.current={callId:state.callId,cursor};
+    },[state.segments,state.callId,current,announce]);
     function latest() {
       following.current = true; setAway(false);
       if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -49,7 +59,8 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
           : <div className="meeting-transcript-empty"><h3 className="text-body-sm">{active ? "Ready when you speak" : "Follow every voice"}</h3><p className="text-subtle">{active ? "Speech appears here after a short pause, with the speaker and time." : call.phase !== "connected" ? "Join a voice room to see its live transcript." : !call.transcription ? "Transcription isn’t available on this meeting service." : "Start a live transcript for this call. No agent or linked chat is needed."}</p></div>}
       </div>
       {away && <button type="button" className="buzz-button meeting-transcript-latest" data-buzz-ui="" data-variant="subtle" data-size="sm" onClick={latest}><span className="buzz-button-label">Jump to latest</span></button>}
-      <details className="meeting-transcript-footnote text-caption text-metadata"><summary>About this transcript</summary><p>Microphone audio is transcribed by your meeting service. Everyone transcribing this call receives the same live text. Save a meeting record to retain a snapshot with this channel, or download a copy. Unsaved text expires after the call. Recognition can make mistakes.</p></details>
+      <div className="meeting-speech-announcement" role="log" aria-live={announce ? "polite" : "off"} aria-atomic="true" aria-label="New speech">{announcement}</div>
+      <details className="meeting-transcript-footnote text-caption text-metadata"><summary>Transcript options</summary><label><input type="checkbox" checked={announce} onChange={event=>{const value=event.target.checked;setAnnounce(value);announceByDefault=value;try{localStorage.setItem("meetings-announce-speech",String(value));}catch{/* This view still updates. */}}} />Announce new speech</label><p>Microphone audio is transcribed by your meeting service. Everyone transcribing this call receives the same live text. Save a meeting record to retain a snapshot with this channel, or download a copy. Unsaved text expires after the call. Recognition can make mistakes.</p></details>
     </aside>;
   };
 }

@@ -1,14 +1,15 @@
 # Persistent Meetings workspaces
 
-Version 0.2.0 implements the shared persistence foundation. Meetings remains its
+The development build extends the persistence foundation introduced in v0.2.0. Meetings remains its
 own installable dock app. A workspace is a permanent Buzz stream channel, and
 its existing identity, membership, conversation, attachments, and Canvas are
 reused. Renaming changes the channel name without copying its content.
 
 ## Using a workspace
 
-Open **Workspaces → +** in Meetings. Link an existing permanent channel you can
-write to, or create a private/open workspace. Private is the default. Invite
+Choose **+** beside **Meetings**, enter a name and choose **Create meeting**.
+The private meeting opens immediately. **Manage workspaces** beside the heading
+links an existing permanent channel you can write to or changes visibility. Invite
 people using Buzz's native channel controls. Channel members using Meetings
 discover the shared link as Buzz synchronizes its artifacts.
 
@@ -18,7 +19,14 @@ read-only, revision, attachment, and error handling. Guests can read but cannot
 link or rename. Renaming requires channel owner/admin permission and a fresh
 channel-details version.
 
-Opening a workspace never starts audio. The last selected workspace is saved
+Opening a workspace never starts audio. **Join voice** joins the same channel's
+stable call destination. On first use, a channel owner/admin explicitly enables
+the Meetings service's guest access after reviewing the disclosure. The service
+checks a native signature and fresh relay membership on admission, then monitors
+revocations even after a broker restart. Voice, Transcript, Agents, Notes,
+Chat & files and Meeting records share this destination.
+
+The last selected workspace is saved
 for the current identity/community on this device, and navigation targets carry
 the same scope and stable channel UUID. Losing membership or switching to a
 different account/community makes an old route unavailable. A cached record
@@ -39,6 +47,8 @@ attachments; this release does not add a separate file browser.
 | Shared workspace discovery | NIP-AR artifact kind 45010, type `studio.h2s2.meetings.workspace` |
 | Last view and unfinished link intent | Buzz artifact collection preferences, scoped by identity/community/plugin on this device |
 | Connected participants and media tracks | Existing LiveKit room session |
+| Live transcript | One service RTC subscriber and bounded temporary timeline per call |
+| Deliberately saved meeting records | Native channel artifacts with exact chunk revisions and task references |
 
 The registry contains only `{"version":1,"channelId":"<channel UUID>"}`.
 Its artifact identity is UUIDv5 using the channel UUID as namespace and the
@@ -84,10 +94,10 @@ offers **Save as shared workspace**, which explicitly links its existing channel
 No background migration creates channels or assumes a name match is an identity.
 
 A call can remain active while you open Notes or Chat, and the workspace retains
-call controls plus a return-to-call button. Existing voice admission still uses
-the deployment's broker/access boundary. Shared workspace voice is intentionally
-not enabled until the server verifies admission against the stable Buzz channel
-and its current membership. The Rust service is unchanged by this release.
+call controls plus a return-to-call button. **Quick rooms** retain the deployment's
+broker/access boundary. Workspace calls additionally verify the stable channel
+and current membership. Existing quick rooms are not silently converted into
+private channel calls.
 
 ## Validation and remaining checks
 
@@ -121,6 +131,7 @@ Before calling native rollout complete, check:
 5. Check actual microphone/camera/screen capture and reconnects separately on
    the target desktop OS and production network.
 
-Next milestones are verified workspace voice admission, per-call session records,
-decisions/actions, agent tools, a public media-to-agent bridge, transcription,
-and collaborative whiteboards. This release claims none of those as implemented.
+Verified workspace admission, shared transcription, live-agent tools and deliberate
+meeting records are implemented in this development build. The native checks above
+remain required; fixtures cannot establish real agent execution or device behavior.
+Collaborative whiteboards remain outside this build.

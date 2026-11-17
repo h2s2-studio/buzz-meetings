@@ -23,6 +23,10 @@ journaled before publication; an interrupted save offers a retry of those exact
 bytes. The manifest is saved last and every publication is read back before
 claiming success. A record never silently changes to a replacement chunk.
 
+**Transcript options → Announce new speech** enables polite screen-reader
+announcements of new entries. It defaults off and remembers your choice on this
+device. Enabling it does not read the existing history aloud.
+
 Unsaved text uses a bounded 4,000-entry window. The service retains at most 16
 recent room timelines for up to 30 minutes; this is temporary memory, not a
 permanent archive. Leaving preserves the device's text until another call,

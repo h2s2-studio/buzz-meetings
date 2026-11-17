@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { build } from "esbuild";
+import { build, transform } from "esbuild";
+
+// Buzz receives the stylesheet as a string. Parse it separately so a malformed
+// stylesheet cannot silently pass a successful JavaScript bundle build.
+const style = await transform(await readFile("src/meeting.css", "utf8"), { loader: "css", logLevel: "silent" });
+if (style.warnings.length) throw new Error(style.warnings.map(warning => warning.text).join("\n"));
 
 const notices = await readFile("THIRD_PARTY_NOTICES", "utf8");
 const result = await build({

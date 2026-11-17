@@ -5,7 +5,7 @@ Buzz channel to keep its notes, conversation, and files available between calls.
 Existing voice rooms support cameras and simultaneous screen sharing through
 the Rust admission server and LiveKit.
 
-> Development branch: live agent listening and task autonomy are described in [Live meeting agents](docs/live-agents.md). They require the updated broker and optional speech service; v0.2.1 does not include them.
+> Development branch: shared transcription, verified workspace voice, meeting records and live agents require the updated broker and speech worker. These changes are available for native testing; the published v0.2.1 release predates them.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
@@ -14,16 +14,17 @@ the Rust admission server and LiveKit.
 1. Open **Settings → Plugins → Manage plugins → Add**.
 2. Paste `https://github.com/h2s2-studio/buzz-meetings` into **Git or GitHub repository**.
    Leave Folder empty. Choose **Find → Install plugin** and enable **Meetings**.
-3. Open **Meetings** in the app dock. Its **Voice Channels** sidebar includes
-   **General Voice** automatically.
-4. Click the room to join. Allow microphone permission when your system asks.
+3. Open **Meetings** in the app dock. Create or open a meeting in the sidebar,
+   then choose **Join voice**. **Quick rooms → General Voice** remains a direct
+   shortcut for existing calls. The v0.2.1 sidebar calls that section **Voice Channels**.
+4. Allow microphone permission when your system asks.
    Your avatar and name appear after connecting. The screen icon opens sharing
    settings above the call controls; choose a source in the system picker. Use **Watch** to view someone’s
    stream, or **Watch all screens** for a grid.
 
 Your community must run the [Meetings deployment](docs/deployment.md). By default,
 the app uses the community’s `/rooms` endpoint. For a separate service, open
-the room header’s **Connection settings** button and enter its `wss://…/rooms` address and access key.
+**Settings → Meetings → Connection settings** and enter its `wss://…/rooms` address and access key.
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
@@ -32,10 +33,12 @@ empty to follow main and use **Check for updates**.
 
 ## Shared workspaces
 
-1. Choose **+** beside **Workspaces** in the Meetings sidebar.
-2. Link a permanent channel you have joined, or create a workspace. New workspaces
-   default to private; choose **Open to the community** explicitly if wanted.
-3. Open the workspace and use **Notes** or **Chat & files**. Notes use Buzz's
+1. Choose **+** beside **Meetings**, enter a name, and choose **Create meeting**.
+   It opens immediately and is private by default. This does not start your microphone.
+2. To link an existing permanent channel or adjust visibility, use **Manage workspaces**
+   beside the heading. Invite people through the native channel controls.
+3. Use **Join voice**, **Transcript**, **Agents**, **Notes**, **Chat & files** or
+   **Meeting records** within that destination. Notes use Buzz's
    native Canvas editor; conversation and attachments use its native chat UI.
 4. Other channel members using Meetings discover the saved workspace through
    Buzz's artifact synchronization. Owners and admins can rename it in
@@ -46,9 +49,10 @@ same permanent Buzz channel after closing Meetings or restarting Buzz. Native
 Canvas uses revision checks to preserve conflicting drafts; reload Notes to see
 another person's edits. It does not provide simultaneous document editing.
 
-The development build joins voice directly from a workspace with verified
-channel membership. Its Voice, Transcript, Agents, Notes, Chat and Meeting records
-views share that channel. Legacy voice shortcuts remain available. See [workspace behavior and recovery](docs/persistent-workspaces.md).
+Workspace voice verifies current channel membership. On first use, a channel
+owner/admin explicitly enables the service's access; the join view explains
+the history and file access this grants. Names can change without moving the call.
+See [workspace behavior and recovery](docs/persistent-workspaces.md).
 
 ## In a room
 
@@ -58,6 +62,12 @@ views share that channel. Legacy voice shortcuts remain available. See [workspac
   see [Live transcripts](docs/transcription.md).
 - Mute, deafen, turn your camera on/off, or leave from the call controls.
   Deafen also mutes your microphone; undeafening leaves it muted until you unmute.
+- **Audio settings** beside the microphone offers join-muted, device choices and
+  a microphone test. Each remote participant has an audio/volume control. Output
+  selection uses system settings when the webview cannot change it.
+- Choose **Add agent** beneath the roster, then **Add** beside a ready agent.
+  It joins as a listening call member; speak a task or send a written request.
+  Role and mission remain optional. See [Live meeting agents](docs/live-agents.md).
 - If camera access is blocked, use **Open camera settings** on macOS or Windows,
   allow Buzz, then choose **Try camera again**. Linux shows manual
   guidance. The settings shortcuts require reviewing the plugin's two
@@ -87,19 +97,23 @@ views share that channel. Legacy voice shortcuts remain available. See [workspac
   Renaming to a different room ends your current call and keeps the linked chat.
   You can remove General Voice or clear the list without it returning after reload.
 
-## Release boundaries
+## Current boundaries
 
-This release provides shared workspace persistence and the core room/call
-workflow; it is not full Discord or Teams feature parity. The roster is live for
+The roster is live for
 the voice room you joined. Cross-room occupancy and shared voice-room discovery
 are not implemented. Display names and
-avatars are supplied from client Buzz profiles; broker admission uses a deployment
-access key or private proxy, not verified Buzz channel membership. Camera,
+avatars are supplied from client Buzz profiles. Quick rooms use the deployment
+access key or private proxy; workspace calls additionally verify signed Buzz
+identity and current channel membership. Camera,
 microphone, and screen capture depend on the desktop webview and OS permissions.
 The development build can request shared sound when its broker supports it and the webview returns an audio track. It reports when a selected source provides no sound; microphone mute remains separate.
 
 Workspace chat, notes, files, and discovery use Buzz's channel permissions.
-Workspace audio, session history, collaborative whiteboards and a permanent transcript archive remain future work. Development live agents use the existing linked voice room and a separate speech worker; see [the live agent guide](docs/live-agents.md). Existing voice access keys do not authorize private
+Saved meeting records deliberately retain transcript snapshots and task references
+in the same channel. Unsaved service text is bounded temporary memory. Native
+agent results, two-person device use, long calls, screen readers and production
+capacity remain acceptance gates. Collaborative whiteboards are outside this build.
+See [the live agent guide](docs/live-agents.md). Existing voice access keys do not authorize private
 channel access. The workspace registry requires Buzz's API-v1 artifact storage,
 artifact writer, channel commands, and native Channels contribution, verified
 against Buzz 1.0.4 contracts.

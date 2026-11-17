@@ -112,6 +112,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     } catch (problem) { if (currentRun(run) && !run.abort.signal.aborted) stop(problem instanceof Error ? problem.message : "Couldn’t start live listening.", run.agent.pubkey); }
   }
   ctx.effect(() => {
+    const stopRuntime=ctx.agents?.subscribe(()=>emit());
     const stopMedia = media.subscribe(() => {
       const call = media.snapshot();
       for (const run of [...active.values()]) {
@@ -130,7 +131,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
       }
     });
     const stopRelay = ctx.relay.subscribe(() => { for (const run of [...active.values()]) if (!allowed(run)) stop("Listening stopped because the connection changed.", run.agent.pubkey); });
-    return () => { stopMedia(); stopTranscript(); stopRelay(); stop(); sessions.clear(); };
+    return () => { stopRuntime?.(); stopMedia(); stopTranscript(); stopRelay(); stop(); sessions.clear(); };
   });
   function sessionFor(client: Client, context: ToolContext, args: Record<string, unknown>, write = false) {
     client.signal?.throwIfAborted();
