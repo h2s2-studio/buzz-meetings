@@ -17,6 +17,8 @@ type Channel = {
   pending?: boolean;
   readOnly?: boolean;
   huddle?: boolean;
+  private?: boolean;
+  visibility?: string;
 };
 type Store<T> = { snapshot(): T; subscribe(listener: () => void): () => void };
 type Filter = { kinds: number[]; "#h": string[]; since: number; limit: number };
@@ -144,13 +146,6 @@ export function apply(ctx: PluginContext) {
     for (const listener of listeners) listener();
   }
 
-  function Headphones() {
-    return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 13v-1a9 9 0 0 1 18 0v1M3 13h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zm18 0h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2z" />
-    </svg>;
-  }
-
   function usePresence(session: Session, parent: string) {
     const [roster, setRoster] = useState<{ session: Session; parent: string; people: readonly string[] }>();
     useEffect(() => {
@@ -208,16 +203,19 @@ export function apply(ctx: PluginContext) {
 
     const isSample = people.length === 0 && preview;
     const shown = isSample ? sample : people;
+    const isPrivate = channel.private || channel.visibility === "private";
     const rosterLabel = isSample ? "Sample roster" : "Recent Huddle participants";
     const name = (key: string) => isSample ? key : profiles.get(key)?.name || `Participant ${key.slice(0, 6)}`;
-    return <div className="h2s2-voice-room" data-buzz-ui="">
+    return <div className="h2s2-voice-room" data-buzz-ui="" data-voice-icon={isPrivate ? undefined : ""}>
       <div className="h2s2-voice-room-header">
         {original}
         {shown.length > 0 ? <button type="button" className="buzz-button" data-size="xs" data-buzz-ui=""
           data-variant="ghost" aria-label={`${channel.name} · ${rosterLabel} · ${shown.length}`}
           aria-controls={listId} aria-expanded={expanded} title={rosterLabel} onClick={() => setExpanded(!expanded)}>
-          <span className="buzz-button-label"><Headphones />{shown.length}</span>
-        </button> : <span className="h2s2-voice-room-icon" title="Voice channel"><Headphones /></span>}
+          <span className="buzz-button-label">{isPrivate && <span className="h2s2-voice-glyph" aria-hidden="true" />}{shown.length}</span>
+        </button> : isPrivate && <span className="h2s2-voice-room-icon" title="Voice channel">
+          <span className="h2s2-voice-glyph" aria-hidden="true" />
+        </span>}
       </div>
       <div id={listId} hidden={!expanded || shown.length === 0} className="h2s2-voice-roster">
         <div className="h2s2-voice-caption">{rosterLabel}</div>

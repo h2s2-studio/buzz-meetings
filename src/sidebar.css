@@ -1,7 +1,21 @@
 .h2s2-voice-room {
+  --h2s2-headphones: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 13v-1a9 9 0 0 1 18 0v1M3 13h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zm18 0h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2z'/%3E%3C/svg%3E");
   min-width: 0;
   color: var(--text-standard, inherit);
 }
+
+.h2s2-voice-glyph,
+.h2s2-voice-room[data-voice-icon] .navigation-item[data-channel-id] > :first-child:has(> svg)::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--h2s2-headphones) center / contain no-repeat;
+}
+
+/* Buzz 1.0.4 puts the channel glyph in the leading slot of its native row. */
+.h2s2-voice-room[data-voice-icon] .navigation-item[data-channel-id] > :first-child > svg { display: none; }
 
 .h2s2-voice-room-header {
   display: grid;

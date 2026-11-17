@@ -17,7 +17,7 @@ Tagged releases include the built `plugin.js` and `manifest.json` at the reposit
 
 ## Try it in Buzz
 
-- With **All** or **Team** selected, find the marked channels in the main sidebar. For a dedicated group, use **Channels → ⋯ → Create section**, name it **Voice channels**, and move the marked channels into it using Buzz’s sidebar.
+- With **All** or **Team** selected, find the marked channels by their headphones icon. Private rooms keep their lock and show a headphones marker beside the row. For a dedicated group, use **Channels → ⋯ → Create section**, name it **Voice channels**, and move the marked channels into it using Buzz’s sidebar.
 - Open a marked room and click the **headphones button** in its conversation header to start or join the native Huddle. Recent participant names and a collapsible count appear beneath the room when the relay provides Huddle events.
 - Enable **Show sample roster** in the plugin’s settings to see the occupied layout on your own. Sample people are labeled and appear only on marked rooms without any recent participants.
 - Channel choices are local to this device and community. Operators can also opt channels in for members by applying the `h2s2:voice` channel label through their existing channel management tools.

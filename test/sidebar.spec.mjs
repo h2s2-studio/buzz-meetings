@@ -19,19 +19,25 @@ test("decorates marked Team rows and keeps native navigation and the roster inde
   await expect(page.getByRole("checkbox", { name: "Studio" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Announcements" })).toHaveCount(0);
   await expect(sidebar.getByRole("list", { name: "Recent Huddle participants" })).toHaveCount(0);
+  const studioRow = sidebar.getByRole("button", { name: "Studio", exact: true });
+  await expect(studioRow.locator("svg")).toBeHidden();
+  await expect(sidebar.getByRole("button", { name: "general", exact: true }).locator("svg")).toBeVisible();
+  expect(await studioRow.evaluate((button) => getComputedStyle(button.firstElementChild, "::before").maskImage)).toContain("data:image/svg+xml");
 
   await page.evaluate(() => window.fixture.join());
   const disclosure = sidebar.getByRole("button", { name: "Studio · Recent Huddle participants · 2" });
   const roster = sidebar.getByRole("list", { name: "Recent Huddle participants" });
   await expect(roster.locator(".h2s2-voice-name")).toHaveText(["Alex", "Riley"]);
   if (browserName === "chromium" && process.env.BUZZ_SCREENSHOT) {
+    await page.getByRole("checkbox", { name: "Playtesting" }).check();
     await page.evaluate(() => document.fonts.ready);
     await sidebar.screenshot({ path: process.env.BUZZ_SCREENSHOT });
+    await page.getByRole("checkbox", { name: "Playtesting" }).uncheck();
   }
   await disclosure.click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await expect(roster).toBeHidden();
-  await sidebar.getByRole("button", { name: "# Studio", exact: true }).click();
+  await studioRow.click();
   await expect(page.locator("output")).toHaveText("Studio");
   await disclosure.click();
   await expect(roster).toBeVisible();
@@ -46,6 +52,7 @@ test("locally chooses additional rooms, isolates community preferences, and supp
   await page.goto(url);
   const sidebar = page.getByRole("navigation", { name: "Buzz sidebar" });
   await page.getByRole("checkbox", { name: "Playtesting" }).check();
+  await expect(sidebar.getByRole("button", { name: "Playtesting", exact: true }).locator("svg")).toBeVisible();
   await page.getByRole("checkbox", { name: "Show sample roster" }).check();
   await expect(sidebar.getByRole("list", { name: "Sample roster" })).toHaveCount(2);
   await page.reload();
