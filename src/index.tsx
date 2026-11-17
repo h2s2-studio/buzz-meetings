@@ -2,6 +2,7 @@ import type * as ReactRuntime from "react";
 import { makeRoomSession, type RoomSnapshot } from "./room";
 import { communityBroker, pluginId, socketUrl } from "./protocol";
 import { presets, type Preset } from "./capture";
+import { cameraPermissions } from "./permissions";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
 import type { Storage, WorkspaceSession } from "./workspaces";
@@ -16,6 +17,7 @@ type Connection = { status?: string; origin?: string; viewer?: string; scope?: s
     media?(url: string, size: "small"): string | undefined } };
 type Context = {
   react: typeof ReactRuntime;
+  host: { runCommand(id: string): Promise<string | null> };
   artifactStorage: Storage;
   relay: { snapshot(): Connection; subscribe(listener: () => void): () => void };
   effect(setup: () => () => void): void;
@@ -27,7 +29,7 @@ type Context = {
   panels: WorkspaceContext["panels"] & { register(panel: { id: string; title: string; matches(target: string): boolean;
     toolbar: ReactRuntime.ComponentType; component: ReactRuntime.ComponentType }): void };
 };
-export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards", "conversation", "artifactStorage"];
+export const inject = ["react", "relay", "pages", "panels", "navigation", "settingsCards", "conversation", "artifactStorage", "host"];
 const glyphs = {
   headphones: "M3 13v-1a9 9 0 0 1 18 0v1M3 13h3v7H3zm18 0h-3v7h3z",
   microphone: "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8",
@@ -67,11 +69,22 @@ export function apply(ctx: Context) {
   let broker = communityBroker(connection.origin) || "";
   let accessKey = "";
   let visible = 0;
-  let ui = { rooms, selected, broker, accessKey, visible, error: "" };
+  let stageChoice = "participants";
+  let ui = { rooms, selected, broker, accessKey, visible, stageChoice, error: "" };
   const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
   function publish(error = "") {
-    ui = { rooms, selected, broker, accessKey, visible, error };
+    ui = { rooms, selected, broker, accessKey, visible, stageChoice, error };
     for (const listener of listeners) listener();
+  }
+  function chooseStage(choice: string) {
+    const call = media.snapshot();
+    stageChoice = stageChoice === choice ? "participants" : choice;
+    publish();
+    if (stageChoice === "all-screens") media.watchAll();
+    else if (stageChoice.startsWith("screen:")) {
+      const id = stageChoice.slice(7);
+      if (call.watching !== id || call.screens.length) media.changeWatch(id);
+    } else media.changeWatch();
   }
   function useUI() { return useSyncExternalStore(subscribe, () => ui); }
   function useCall() { return useSyncExternalStore(media.subscribe, media.snapshot); }
@@ -146,10 +159,12 @@ export function apply(ctx: Context) {
     </span>;
   }
   function Roster({ call, tiles = false }: { call: RoomSnapshot; tiles?: boolean }) {
+    const state = useUI();
     return <ul className={tiles ? "meeting-tiles" : "meeting-roster"} aria-label={tiles ? "Meeting participants" : "Connected participants"}>
       {call.participants.map(person => <li key={person.id} data-speaking={person.speaking || undefined}>
+        <button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`Show ${person.name} on stage`} aria-pressed={state.stageChoice === `person:${person.id}`} onClick={() => chooseStage(`person:${person.id}`)}>
         {tiles && person.video ? <Video stream={person.video} label={`${person.name}’s camera`} /> : <Avatar person={person} large={tiles} />}
-        <span>{person.name}{person.local ? " (you)" : ""}</span>
+        <span>{person.name}{person.local ? " (you)" : ""}</span></button>
         {person.muted && <span className="meeting-muted" title="Muted"><Icon name="microphone" /><span className="sr-only">Muted</span></span>}
         {call.streams.some(stream => stream.presenter === person.name) && <span className="meeting-live">Live</span>}
       </li>)}
@@ -165,8 +180,8 @@ export function apply(ctx: Context) {
         onClick={() => { void change(() => media.setMuted(!call.muted)); }} />
       <Button label={call.deafened ? "Undeafen" : "Deafen"} icon="headphones" iconOnly={compact} active={call.deafened} disabled={busy || call.phase !== "connected"}
         onClick={() => { void change(() => media.setDeafened(!call.deafened)); }} />
-      {!compact && <Button label={call.camera ? "Camera off" : "Camera on"} icon="camera" iconOnly={compact} active={call.camera} disabled={busy || call.phase !== "connected"}
-        onClick={() => { void change(() => media.setCamera(!call.camera)); }} />}
+      {!compact && <Button label={call.cameraPhase === "choosing" ? "Cancel camera" : call.cameraPhase === "publishing" ? "Starting camera…" : call.camera ? "Camera off" : "Camera on"} icon="camera" iconOnly={compact} active={call.camera} disabled={busy || call.phase !== "connected" || call.cameraPhase === "publishing"}
+        onClick={() => { if (call.cameraPhase) media.cancelCamera(); else void media.setCamera(!call.camera); }} />}
       {children}<span className="meeting-control-divider" />
       <Button label="Leave room" icon="leave" iconOnly={compact} danger onClick={() => media.leave()} />
     </div>;
@@ -198,6 +213,24 @@ export function apply(ctx: Context) {
     useEffect(() => { const element = ref.current; if (!element) return; element.srcObject = stream;
       return () => { element.srcObject = null; }; }, [stream]);
     return <video ref={ref} aria-label={label} autoPlay muted playsInline />;
+  }
+  function CameraAccess() {
+    const help = cameraPermissions(navigator.platform);
+    const [opening, setOpening] = useState(false);
+    const [failed, setFailed] = useState(false);
+    async function settings() {
+      if (!help.command || opening) return;
+      setOpening(true); setFailed(false);
+      try { setFailed(await ctx.host.runCommand(help.command) === null); }
+      catch { setFailed(true); }
+      finally { setOpening(false); }
+    }
+    return <div className="meeting-recovery text-body-sm" role="group" aria-label="Camera permissions" style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+      <p style={{ flexBasis: "100%" }}>{help.instructions}</p>
+      {help.command && <Button label="Open camera settings" variant="ghost" disabled={opening} onClick={() => { void settings(); }} />}
+      <Button label="Try camera again" disabled={opening} onClick={() => { void media.setCamera(true); }} />
+      {failed && <p role="alert">Couldn’t open camera settings. Follow the steps above to open them manually.</p>}
+    </div>;
   }
   function RoomManagement() {
     const state = useUI(); const call = useCall();
@@ -303,9 +336,15 @@ export function apply(ctx: Context) {
     const workspace = workspaces.useState();
     const [preset, setPreset] = useState<Preset>("balanced"); const [fullscreenError, setFullscreenError] = useState("");
     const [chatOpen, setChatOpen] = useState(true);
+    const stageChoice = state.stageChoice;
     useEffect(() => { visible++; publish(); return () => { visible--; publish(); }; }, []);
     const connected = call.phase === "connected";
     const watching = call.streams.find(stream => stream.id === call.watching);
+    const person = call.participants.find(person => stageChoice === `person:${person.id}`);
+    const localScreen = stageChoice === "your-screen" && call.sharing;
+    const remoteScreen = stageChoice.startsWith("screen:") && call.video;
+    const allScreens = stageChoice === "all-screens" && call.screens.length > 0;
+
     function fullscreen() {
       const element = video.current;
       if (element?.requestFullscreen) void element.requestFullscreen().catch(() => setFullscreenError("Fullscreen isn’t available in this window."));
@@ -319,22 +358,27 @@ export function apply(ctx: Context) {
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} participants` : state.selected ? "Voice channel" : ""}</span></div></div>
         <div className="panel-header-actions">{(call.video || call.screens.length > 0) && <Button label="Fullscreen" icon="expand" iconOnly variant="ghost" onClick={fullscreen} />}<Button label={chatOpen ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen} onClick={() => setChatOpen(!chatOpen)} /><Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
       </header>
-      {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span><Button label="Connection settings" variant="ghost" onClick={openSettings} /></div>}
+      {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span>{!call.cameraDenied && <Button label="Connection settings" variant="ghost" onClick={openSettings} />}</div>}
+      {call.cameraDenied && connected && <CameraAccess />}
       {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
       <div className="meeting-body" data-chat-open={chatOpen || undefined}><div className="meeting-content">
         <div className="meeting-stage" ref={video}>
-          {call.screens.length ? <div className="meeting-screen-grid">{call.screens.map(screen => <div className="meeting-screen-tile" key={screen.id}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></div>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => media.changeWatch()} /></div></div>
-            : call.video ? <div className="meeting-focused-screen"><Video stream={call.video} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen</span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select><Button label="Stop watching" variant="ghost" onClick={() => media.changeWatch()} /></div></div></div>
+          {localScreen ? <div className="meeting-focused-screen"><Video stream={localScreen.preview} label="Your screen on stage" /></div>
+            : person ? <div className="meeting-focused-screen">{person.video ? <Video stream={person.video} label={`${person.name}’s camera on stage`} /> : <Avatar person={person} large />}<span className="text-body-sm">{person.name}</span><Button label="Back to participants" variant="ghost" onClick={() => chooseStage("participants")} /></div>
+            :
+          allScreens ? <div className="meeting-screen-grid">{call.screens.map(screen => <button type="button" className="meeting-screen-tile" key={screen.id} aria-label={`Focus ${screen.presenter}’s screen`} onClick={() => chooseStage(`screen:${screen.id}`)}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></button>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div>
+            : remoteScreen ? <div className="meeting-focused-screen"><Video stream={remoteScreen} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen</span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
             : call.participants.length ? <Roster call={call} tiles /> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Create a voice channel to start a conversation."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage voice channels"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Your microphone turns on when you join.</span>}</div>}
           {fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}
         </div>
-        {(call.streams.length > 0 || call.sharing) && <aside className="meeting-streams" aria-label="Live streams"><div className="meeting-streams-header"><h3 className="text-caption text-metadata">Screen sharing</h3>{call.streams.length > 1 && <Button label="Watch all screens" icon="screen" iconOnly variant="ghost" onClick={() => media.watchAll()} />}</div>
-          {call.sharing && <div className="meeting-preview"><Video stream={call.sharing.preview} label="Your stream preview" /><div className="meeting-preview-caption"><span className="text-caption text-subtle">{call.sharing.label} · Your screen</span><Button label="Change source" icon="screen" iconOnly variant="ghost" disabled={call.picking || call.stopping || !connected} onClick={() => { void media.share(preset); }} /></div></div>}
-          {call.streams.map(stream => <button className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={stream.id === call.watching || undefined} type="button" key={stream.id} aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={stream.id === call.watching} disabled={!connected} onClick={() => media.changeWatch(stream.id)}><Icon name="screen" /><span className="navigation-item-label">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></button>)}
+        {(call.streams.length > 0 || call.sharing) && <aside className="meeting-streams" aria-label="Live streams"><div className="meeting-streams-header"><h3 className="text-caption text-metadata">Screen sharing</h3>{call.streams.length > 1 && <Button label="Watch all screens" icon="screen" iconOnly variant="ghost" onClick={() => chooseStage("all-screens")} />}</div>
+          {call.sharing && <div className="meeting-preview"><button type="button" className="meeting-preview-select" aria-label="Show your screen on stage" aria-pressed={stageChoice === "your-screen"} onClick={() => chooseStage("your-screen")}><Video stream={call.sharing.preview} label="Your stream preview" /></button><div className="meeting-preview-caption"><span className="text-caption text-subtle">{call.sharing.label} · Your screen</span><Button label="Change source" icon="screen" iconOnly variant="ghost" disabled={call.picking || call.stopping || !connected} onClick={() => { void media.share(preset); }} /></div></div>}
+          {call.streams.map(stream => <button className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={stageChoice === `screen:${stream.id}` || undefined} type="button" key={stream.id} aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={stageChoice === `screen:${stream.id}`} disabled={!connected} onClick={() => chooseStage(`screen:${stream.id}`)}><Icon name="screen" /><span className="navigation-item-label">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></button>)}
         </aside>}
       </div>{chatOpen && !!(call.roomName || state.selected) && <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />}</div>
       {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call}>
-        {call.sharing ? <Button label="Stop sharing" icon="screen" active disabled={call.stopping} onClick={() => { void media.stopSharing(); }} /> : <Button label={call.picking ? "Choosing screen…" : "Share screen"} icon="screen" disabled={!connected || call.picking || call.stopping} onClick={() => { void media.share(preset); }} />}
+        {call.sharing ? <Button label="Stop sharing" icon="screen" active disabled={call.stopping} onClick={() => { void media.stopSharing(); }} /> : <Button label={call.picking ? call.capturePhase === "preparing" ? "Preparing screen…" : call.capturePhase === "publishing" ? "Starting share…" : "Choosing screen…" : "Share screen"} icon="screen" disabled={!connected || call.picking || call.stopping} onClick={() => { void media.share(preset); }} />}
+        {call.picking && call.capturePhase !== "publishing" && <Button label="Cancel screen share" variant="ghost" onClick={() => media.cancelScreen()} />}
       </Controls><details className="meeting-quality"><summary aria-label="Stream options" title="Stream options"><Icon name="settings" /></summary><label className="text-caption">Share quality<select className="buzz-input" data-size="sm" value={preset} disabled={call.picking} onChange={event => setPreset(event.target.value as Preset)}>{Object.entries(presets).map(([key, value]) => <option value={key} key={key}>{value.label}</option>)}</select></label></details></footer>}
     </section>;
   }

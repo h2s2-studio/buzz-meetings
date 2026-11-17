@@ -3,5 +3,11 @@
   "name": "Meetings",
   "apiVersion": 1,
   "description": "Shared workspaces, notes, chat, voice rooms, cameras, and screen sharing.",
-  "discovery": { "category": "communication", "tags": ["meetings", "workspaces", "voice", "screen-sharing"] }
+  "discovery": { "category": "communication", "tags": ["meetings", "workspaces", "voice", "screen-sharing"] },
+  "host": {
+    "commands": [
+      { "id": "camera-settings-macos", "program": "open", "args": ["x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"] },
+      { "id": "camera-settings-windows", "program": "explorer.exe", "args": ["ms-settings:privacy-webcam"] }
+    ]
+  }
 }

@@ -12,6 +12,8 @@ let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer
 const settings = new Map();
 let page, panel, rejectCapture = false, rejectMicrophone = query.has("deny"), holdMicrophone = query.has("hold");
 let releaseMicrophone, navigation, microphoneRequests = 0;
+let holdCamera = false, holdScreen = false, releaseCamera, releaseScreen, denyCamera = false;
+const cameraSettingsCommands = [];
 // These two components stand in for Buzz's native conversation/Canvas owners.
 // Their shared state comes from the test HTTP service, never browser-local data.
 function Workspace({ target, label }) {
@@ -47,6 +49,8 @@ function Canvas({ channelContext }) {
 const nativePanels = [{ id: "canvas", pluginId: "buzz.channels", revision: "fixture", component: Canvas }];
 const mockMicrophone = async (options) => {
   if (options.video) {
+    if (denyCamera) { denyCamera = false; throw new DOMException("Permission denied", "NotAllowedError"); }
+    if (holdCamera) await new Promise(resolve => { releaseCamera = resolve; });
     const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360;
     const context = canvas.getContext("2d"); context.fillStyle = "#516683"; context.fillRect(0, 0, 640, 360);
     const stream = canvas.captureStream(12); cameras.push(stream.getVideoTracks()[0]);
@@ -63,8 +67,9 @@ const mockMicrophone = async (options) => {
   return destination.stream;
 };
 const mockScreen = async ({ video }) => {
+  if (holdScreen) await new Promise(resolve => { releaseScreen = resolve; });
   if (rejectCapture) { rejectCapture = false; throw new DOMException("Capture canceled", "NotAllowedError"); }
-  const canvas = document.createElement("canvas"); canvas.width = video.width.ideal; canvas.height = video.height.ideal;
+  const canvas = document.createElement("canvas"); canvas.width = video === true ? 1280 : video.width.ideal; canvas.height = video === true ? 720 : video.height.ideal;
   const context = canvas.getContext("2d"); let frame = 0;
   const draw = () => {
     ++frame;
@@ -97,6 +102,7 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
 } }) });
 const { apply } = await import("../plugin.js");
 apply({ react: React, artifactStorage: host.storage,
+  host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
   pages: { register(entry) { page = entry; } }, panels: { register(entry) { panel = entry; }, snapshot: () => nativePanels, subscribe: () => () => {} },
@@ -109,6 +115,12 @@ window.meetingTest = {
   workspaceState: host.snapshot,
   navigate: target => navigation?.(target),
   cancelNextCapture() { rejectCapture = true; },
+  denyNextCamera() { denyCamera = true; },
+  cameraSettingsCommands: () => cameraSettingsCommands,
+  holdCamera() { holdCamera = true; },
+  releaseCamera() { holdCamera = false; releaseCamera?.(); },
+  holdScreen() { holdScreen = true; },
+  releaseScreen() { holdScreen = false; releaseScreen?.(); },
   microphoneRequests: () => microphoneRequests,
   microphoneStates: () => microphones.map(track => track.readyState),
   cameraStates: () => cameras.map(track => track.readyState),
