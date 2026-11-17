@@ -13,6 +13,11 @@ services:
       MEETING_ACCESS_KEY: ${MEETING_ACCESS_KEY:?Set a random room creation key}
       MEETING_TRANSCRIBER_URL: ${MEETING_TRANSCRIBER_URL:-}
       MEETING_PROXY_KEY: ${MEETING_PROXY_KEY:-}
+      MEETING_RELAY_URL: ${MEETING_RELAY_URL:-}
+      MEETING_RELAY_PUBLIC_KEY: ${MEETING_RELAY_PUBLIC_KEY:-}
+      MEETING_IDENTITY_FILE: ${MEETING_IDENTITY_FILE:-}
+    volumes:
+      - meeting-identity:/identity
   livekit:
     image: livekit/livekit-server:v1.13.11
     network_mode: host
@@ -53,4 +58,5 @@ services:
       retries: 5
 
 volumes:
+  meeting-identity:
   speech-models:

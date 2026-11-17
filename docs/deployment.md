@@ -100,3 +100,40 @@ Huddles/Streams sessions before joining Meetings. Remove **Voice channels** and
 **Screen sharing** from Manage plugins after the replacement works. Meetings
 has its own plugin ID (`studio.h2s2.meetings`) and needs an installation review.
 The older prototypes' local room choices are not imported.
+
+
+## Workspace voice and shared speech
+
+The updated broker and speech image must be deployed together. Shared
+transcription uses the worker's LiveKit RTC client in addition to its existing
+Whisper endpoint; install `services/transcriber/requirements.txt` in full. Keep
+8092 on loopback. Start and health-check the worker before switching the broker.
+Retain the previous image tags and Compose override for rollback. Neither a
+relay restart nor a LiveKit restart is required.
+
+For voice bound to channel membership, configure all three:
+
+- `MEETING_RELAY_URL`: the exact existing community origin.
+- `MEETING_RELAY_PUBLIC_KEY`: its advertised `self` key, pinned by the operator.
+- `MEETING_IDENTITY_FILE`: `/identity/meetings.key` on the persistent identity
+  volume. The broker creates its own random key on first start, with mode 0600.
+  Never print, copy, or put this key in the plugin. Keep the volume backed up.
+
+The image prepares `/identity` for UID 65534. The startup log publishes only the
+service's public key. Add that key as an ordinary community member through the
+relay's supported administration command. It needs no owner attestation, admin
+role, relay key or database access. Channel owners enable voice deliberately in
+the workspace: this adds the service as a guest, with access to channel history
+and files. No channel is silently granted to it during deployment.
+
+Admissions use a fresh native-signed proof and a live `/query` check of relay
+channel records. Membership is rechecked every ten seconds for voice and text;
+transient relay failures have bounded retry and access failures stop delivery.
+The LiveKit admin API must remain reachable at the configured media origin for
+revocation. Test member removal before treating private voice as ready.
+
+Current worker bounds: four active calls, 64 transcript viewers per call, eight
+queued chunks per call, 4,000 retained entries, 16 retained rooms/30 minutes.
+The broker also bounds concurrent sockets to 64. The defaults are protective
+limits, not a production capacity benchmark. Measure CPU, memory and delivery
+delay on your hardware; leave room for the relay and media server.

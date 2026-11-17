@@ -46,16 +46,15 @@ same permanent Buzz channel after closing Meetings or restarting Buzz. Native
 Canvas uses revision checks to preserve conflicting drafts; reload Notes to see
 another person's edits. It does not provide simultaneous document editing.
 
-Shared workspaces and existing voice shortcuts remain separate in this release.
-You can keep an existing call connected while browsing a workspace, but joining
-voice through a workspace awaits admission verified against that channel's
-membership. See [workspace behavior and recovery](docs/persistent-workspaces.md).
+The development build joins voice directly from a workspace with verified
+channel membership. Its Voice, Transcript, Agents, Notes, Chat and Meeting records
+views share that channel. Legacy voice shortcuts remain available. See [workspace behavior and recovery](docs/persistent-workspaces.md).
 
 ## In a room
 
-- In the development build, open **Transcript** and choose **Start transcription**
+- In the development build, open **Transcript**
   to follow speakers without an agent or linked chat. Pause and resume independently
-  of agent listening. Text stays in this app session until rejoin or reload;
+  of agent listening. Search, copy, download or deliberately save a meeting record;
   see [Live transcripts](docs/transcription.md).
 - Mute, deafen, turn your camera on/off, or leave from the call controls.
   Deafen also mutes your microphone; undeafening leaves it muted until you unmute.

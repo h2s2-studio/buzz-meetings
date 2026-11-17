@@ -1,3 +1,6 @@
+import { isVoice, type VoiceRequest } from "./protocol";
+import type { AdmissionProof } from "./workspace-voice";
+import { openSharedTranscription, type SharedTranscript } from "./shared-transcription";
 import {
   Room, RoomEvent, Track, VideoPresets, VideoQuality,
   type LocalVideoTrack, type RemoteTrackPublication, type LocalAudioTrack, type Participant,
@@ -27,8 +30,9 @@ type ActiveRoom = {
   publish?: Capture;
   pending?: MediaStream;
   transcription: boolean;
+  sharedTranscription: boolean;
   transcribing?: boolean;
-  listener?: { name: string; mode: "act" | "assist" };
+  listener?: { name: string; mode: "act" | "assist"; agents?: { pubkey:string; name:string; mode:"act" | "assist" }[] };
   metadataUpdate?: Promise<void>;
   screenAudio: boolean;
   picking: boolean;
@@ -49,10 +53,13 @@ type ActiveRoom = {
   audio: Map<string, HTMLMediaElement>;
   deafened: boolean;
   broker: string;
-  meeting?: Extract<RoomRequest, { type: "meeting" }>;
+  meeting?: VoiceRequest;
+  proof?: AdmissionProof;
   roomName?: string;
+  workspaceChannelId?: string;
   grid: Map<string, RemoteTrackPublication>;
 };
+export type AudioPreferences = { microphone: string; output: string; joinMuted: boolean };
 type Quality = VideoQuality | "auto";
 type Stream = { id: string; presenterId: string; presenter: string; muted: boolean };
 export type RoomSnapshot = {
@@ -66,6 +73,8 @@ export type RoomSnapshot = {
   cameraDenied?: boolean;
   stopping: boolean;
   transcription: boolean;
+  sharedTranscription: boolean;
+  transcriptActive?: boolean;
   screenAudio: boolean;
   sharing?: Pick<Capture, "label" | "preset" | "preview" | "soundRequested" | "soundError"> & { sound: boolean };
   streams: Stream[];
@@ -74,7 +83,8 @@ export type RoomSnapshot = {
   quality: Quality;
   layers: { value: VideoQuality; height: number }[];
   roomName?: string;
-  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; transcribing: boolean; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
+  workspaceChannelId?: string;
+  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; listeners?: { pubkey:string; name:string }[]; transcribing: boolean; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
   muted: boolean;
   deafened: boolean;
   audioBlocked: boolean;
@@ -82,7 +92,7 @@ export type RoomSnapshot = {
   camera: boolean;
 };
 const idle: RoomSnapshot = {
-  phase: "idle", transcription: false, screenAudio: false, picking: false, stopping: false, streams: [], quality: "auto", layers: [],
+  phase: "idle", transcription: false, sharedTranscription: false, screenAudio: false, picking: false, stopping: false, streams: [], quality: "auto", layers: [],
   participants: [], muted: false, deafened: false, audioBlocked: false, screens: [], camera: false,
 };
 
@@ -102,6 +112,8 @@ function layers(publication?: RemoteTrackPublication): RoomSnapshot["layers"] {
 export function makeRoomSession() {
   let active: ActiveRoom | undefined;
   let snapshot = idle;
+  let preferences: AudioPreferences = { microphone: "", output: "", joinMuted: false };
+  const volumes = new Map<string, number>();
   const listeners = new Set<() => void>();
   function emit(next: RoomSnapshot) {
     snapshot = next;
@@ -131,23 +143,24 @@ export function makeRoomSession() {
     }
     syncScreenAudio(run);
     emit({
-      sessionId: run.id, screenAudio: run.screenAudio, transcription: run.transcription,
+      sessionId: run.id, screenAudio: run.screenAudio, transcription: run.transcription, sharedTranscription: run.sharedTranscription,
+      transcriptActive: [...run.room.remoteParticipants.values()].some(person => person.identity.startsWith("transcription-")),
       phase, error, streams, invite: run.invite, picking: run.picking, capturePhase: run.capturePhase, cameraPhase: run.cameraPhase, cameraDenied: run.cameraDenied, stopping: run.stopping,
       sharing: run.publish && {
         label: run.publish.label, preset: run.publish.preset, preview: run.publish.preview,
         sound: !!run.publish.audio && run.publish.audio.mediaStreamTrack.readyState === "live", soundRequested: run.publish.soundRequested, soundError: run.publish.soundError,
       },
       watching: run.watching?.trackSid, video: run.remote, quality: run.quality, layers: available,
-      roomName: run.roomName,
-      participants: phase === "connecting" ? [] : [run.room.localParticipant, ...run.room.remoteParticipants.values()].map((person: Participant) => {
-        let picture: string | undefined; let listener: string | undefined; let transcribing = false;
-        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; transcribing = metadata.liveTranscription === true; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
+      roomName: run.roomName, workspaceChannelId: run.workspaceChannelId,
+      participants: phase === "connecting" ? [] : [run.room.localParticipant, ...[...run.room.remoteParticipants.values()].filter(person => !person.identity.startsWith("transcription-"))].map((person: Participant) => {
+        let picture: string | undefined; let listener: string | undefined; let agentList: {pubkey:string; name:string}[] = []; let transcribing = false;
+        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; if (Array.isArray(metadata.liveAgents)) agentList = metadata.liveAgents.slice(0,4).filter((agent: {pubkey?:unknown; name?:unknown}) => typeof agent.pubkey === "string" && /^[0-9a-f]{64}$/.test(agent.pubkey) && typeof agent.name === "string" && agent.name.length <= 64); transcribing = metadata.liveTranscription === true; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
         const cameraTrack = person.isCameraEnabled ? person.getTrackPublication(Track.Source.Camera)?.videoTrack?.mediaStreamTrack : undefined;
         const previousPerson = snapshot.participants.find(item => item.id === person.identity);
         const previous = previousPerson?.video;
         const audioTrack = person.getTrackPublication(Track.Source.Microphone)?.audioTrack?.mediaStreamTrack;
         const audio = audioTrack ? previousPerson?.audio?.getAudioTracks()[0] === audioTrack ? previousPerson.audio : new MediaStream([audioTrack]) : undefined;
-        return { id: person.identity, name: person.name || "Participant", picture, listener, transcribing,
+        return { id: person.identity, name: person.name || "Participant", picture, listener, listeners: agentList, transcribing,
           local: person === run.room.localParticipant, speaking: person.isSpeaking,
           muted: !person.isMicrophoneEnabled, audio,
           video: cameraTrack ? previous?.getVideoTracks()[0] === cameraTrack ? previous : new MediaStream([cameraTrack]) : undefined };
@@ -207,7 +220,7 @@ export function makeRoomSession() {
     emit({ ...idle, error });
   }
 
-  async function connect(brokerInput: string, request: RoomRequest, preset?: Preset) {
+  async function connect(brokerInput: string, request: RoomRequest, preset?: Preset, proof?: AdmissionProof) {
     if (active) return;
     let broker: string;
     try {
@@ -217,7 +230,7 @@ export function makeRoomSession() {
     }
     const room = new Room({ dynacast: true });
     const run: ActiveRoom = { id: crypto.randomUUID(), room, abort: new AbortController(), quality: "auto", picking: preset !== undefined, stopping: false,
-      audio: new Map(), grid: new Map(), screenAudio: false, transcription: false, broker, meeting: request.type === "meeting" ? request : undefined, deafened: false, roomName: request.type === "meeting" ? request.room : undefined };
+      audio: new Map(), grid: new Map(), screenAudio: false, transcription: false, sharedTranscription: false, broker, meeting: isVoice(request) ? request : undefined, proof, workspaceChannelId: request.type === "workspace" ? request.channel : undefined, deafened: false, roomName: isVoice(request) ? request.room : undefined };
     active = run;
     refresh(run, "connecting", "");
     const sync = () => refresh(run);
@@ -230,18 +243,20 @@ export function makeRoomSession() {
       })
       .on(RoomEvent.ParticipantDisconnected, sync)
       .on(RoomEvent.TrackPublished, (publication) => {
-        if (request.type === "meeting" && [Track.Source.Microphone, Track.Source.Camera].includes(publication.source)) publication.setSubscribed(true);
+        if (isVoice(request) && [Track.Source.Microphone, Track.Source.Camera].includes(publication.source)) publication.setSubscribed(true);
         sync();
       })
       .on(RoomEvent.TrackUnpublished, sync)
-      .on(RoomEvent.TrackSubscribed, (track, publication) => {
+      .on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (active !== run) return;
-        if (request.type === "meeting" && track.kind === Track.Kind.Audio) {
+        if (isVoice(request) && track.kind === Track.Kind.Audio) {
           if (publication.source === Track.Source.ScreenShareAudio && !wantsScreenAudio(run, publication)) { publication.setSubscribed(false); return; }
           const existing = run.audio.get(publication.trackSid);
           if (existing) { existing.pause(); existing.srcObject = null; existing.remove(); }
           const element = track.attach();
           element.muted = run.deafened;
+          element.volume = volumes.get(participant.identity) ?? 1;
+          if (preferences.output && "setSinkId" in element) void (element as HTMLAudioElement & { setSinkId(id: string): Promise<void> }).setSinkId(preferences.output).catch(() => refresh(run, undefined, "Couldn’t use that audio output. Check Audio settings."));
           element.setAttribute("data-meeting-audio", publication.trackSid);
           element.setAttribute("data-meeting-source", publication.source);
           run.audio.set(publication.trackSid, element);
@@ -276,11 +291,11 @@ export function makeRoomSession() {
 
     let source: MediaStream | undefined;
     try {
-      if (request.type === "meeting") {
+      if (isVoice(request)) {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone capture isn’t available in this Buzz installation.");
         // Acquire from this explicit room click, before network work. A canceled
         // permission prompt must never leave capture running in another room.
-        const stream = await untilCanceled(navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }), run.abort.signal, stopStream);
+        const stream = await untilCanceled(navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, ...(preferences.microphone ? { deviceId: { exact: preferences.microphone } } : {}) }, video: false }), run.abort.signal, stopStream);
         if (active !== run) { stopStream(stream); return; }
         run.pendingMicrophone = stream;
         void room.startAudio().catch(sync);
@@ -296,10 +311,11 @@ export function makeRoomSession() {
         run.picking = false;
         refresh(run);
       }
-      const admission = await requestRoom(broker, request, run.abort.signal);
+      const admission = await requestRoom(broker, request, run.abort.signal, run.proof);
       if (active !== run) return;
-      run.transcription = request.type === "meeting" && admission.capabilities?.transcription === true;
-      run.screenAudio = request.type === "meeting" && admission.capabilities?.screenAudio === true;
+      run.transcription = isVoice(request) && admission.capabilities?.transcription === true;
+      run.sharedTranscription = isVoice(request) && admission.capabilities?.sharedTranscription === true;
+      run.screenAudio = isVoice(request) && admission.capabilities?.screenAudio === true;
       if (admission.invite) {
         run.invite = {
           link: inviteLink({ broker, code: admission.invite.code }),
@@ -324,7 +340,8 @@ export function makeRoomSession() {
         if (active !== run) { track.stop(); await room.disconnect(); return; }
         run.microphone = publication.audioTrack;
         if (!run.microphone) throw new Error("Couldn’t publish microphone audio.");
-        track.addEventListener("ended", () => { if (active === run) leave("The microphone disconnected. Join the room to try again."); }, { once: true });
+        if (preferences.joinMuted) { track.enabled = false; await run.microphone.mute(); }
+        track.addEventListener("ended", () => { if (active === run && run.microphone?.mediaStreamTrack === track) leave("The microphone disconnected. Join the room to try again."); }, { once: true });
         for (const person of room.remoteParticipants.values()) {
           person.getTrackPublication(Track.Source.Microphone)?.setSubscribed(true);
           person.getTrackPublication(Track.Source.Camera)?.setSubscribed(true);
@@ -352,6 +369,34 @@ export function makeRoomSession() {
     } catch { refresh(run, undefined, "Couldn’t change the microphone. Leave and rejoin to retry."); }
   }
 
+  async function configureAudio(next: Partial<AudioPreferences>) {
+    preferences = { ...preferences, ...next };
+    const run = active; if (!run || snapshot.phase !== "connected") return;
+    try {
+      if (next.microphone !== undefined && run.microphone) {
+        const stream = await untilCanceled(navigator.mediaDevices.getUserMedia({ audio: { deviceId: preferences.microphone ? { exact:preferences.microphone } : undefined, echoCancellation:true, noiseSuppression:true }, video:false }), run.abort.signal, stopStream);
+        if (active !== run) { stopStream(stream); return; }
+        const track = stream.getAudioTracks()[0], previous = run.microphone.mediaStreamTrack, muted = run.microphone.isMuted;
+        if (!track) throw new Error("No microphone track.");
+        track.enabled = !muted;
+        await run.microphone.replaceTrack(track, true);
+        previous.stop();
+        if (active !== run) { track.stop(); return; }
+        track.addEventListener("ended", () => { if (active === run && run.microphone?.mediaStreamTrack === track) leave("The microphone disconnected. Choose an available device and rejoin."); },{ once:true });
+      }
+      if (next.output !== undefined) for (const element of run.audio.values()) {
+        if ("setSinkId" in element) await (element as HTMLAudioElement & { setSinkId(id:string):Promise<void> }).setSinkId(preferences.output);
+      }
+      refresh(run);
+    } catch { if (active === run) refresh(run,undefined,"Couldn’t switch audio devices. Choose an available device in Audio settings."); }
+  }
+  function setVolume(participantId: string, value: number) {
+    if (!Number.isFinite(value)) return;
+    const volume = Math.max(0,Math.min(1,value)); volumes.set(participantId,volume);
+    const run = active; if (!run) return;
+    const person = run.room.remoteParticipants.get(participantId);
+    for (const publication of person?.audioTrackPublications.values() ?? []) { const element = run.audio.get(publication.trackSid); if (element) element.volume=volume; }
+  }
   async function setDeafened(deafened: boolean) {
     const run = active;
     if (!run || snapshot.phase !== "connected") return;
@@ -632,13 +677,13 @@ export function makeRoomSession() {
       if (active !== run) return;
       let picture: string | undefined;
       try { const metadata = JSON.parse(run.room.localParticipant.metadata || "{}"); if (typeof metadata.picture === "string") picture = metadata.picture; } catch { /* No profile image. */ }
-      await run.room.localParticipant.setMetadata(JSON.stringify({ ...(picture ? { picture } : {}), ...(run.transcribing ? { liveTranscription: true } : {}), ...(run.listener ? { liveAgent: { name: run.listener.name.slice(0,64), mode: run.listener.mode } } : {}) }));
+      await run.room.localParticipant.setMetadata(JSON.stringify({ ...(run.meeting?.type === "workspace" ? { channel:run.meeting.channel } : {}), ...(picture ? { picture } : {}), ...(run.transcribing ? { liveTranscription: true } : {}), ...(run.listener ? { liveAgent: { name: run.listener.name.slice(0,64), mode: run.listener.mode }, liveAgents: run.listener.agents?.slice(0,4) } : {}) }));
       refresh(run);
     });
     run.metadataUpdate = update;
     return update;
   }
-  async function setListener(callId: string, listener?: { name: string; mode: "act" | "assist" }) {
+  async function setListener(callId: string, listener?: ActiveRoom["listener"]) {
     const run = active; if (!run || run.id !== callId) return;
     run.listener = listener;
     await updateMetadata(run);
@@ -648,13 +693,19 @@ export function makeRoomSession() {
     run.transcribing = value;
     await updateMetadata(run);
   }
+  function captions(signal: AbortSignal, receive: (packet: SharedTranscript) => void, failed: (error: string) => void) {
+    const run = active;
+    if (!run?.meeting || !run.sharedTranscription || snapshot.phase !== "connected") return Promise.reject(new Error("Shared transcription is unavailable."));
+    return openSharedTranscription(run.broker, run.meeting, signal, receive, failed, run.proof);
+  }
   function transcribe(signal: AbortSignal, receive: (segments: TranscriptSegment[]) => void, failed: (error: string) => void) {
     const run = active;
-    if (!run?.meeting || !run.transcription || snapshot.phase !== "connected") return Promise.reject(new Error("Live transcription requires an updated meeting service with speech support."));
+    if (!run?.meeting || run.meeting.type !== "meeting" || !run.transcription || snapshot.phase !== "connected") return Promise.reject(new Error("Live transcription requires an updated meeting service with speech support."));
     return openTranscription(run.broker, run.meeting, signal, receive, failed);
   }
   return {
-    setListener, setTranscribing, transcribe, connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera, cancelCamera, cancelScreen,
+    configureAudio, audioPreferences: () => preferences, setVolume, volume: (id:string) => volumes.get(id) ?? 1,
+    setListener, setTranscribing, transcribe, captions, connect, leave, changeWatch, watchAll, quality, share, stopSharing, setMuted, setDeafened, resumeAudio, setCamera, cancelCamera, cancelScreen,
     snapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);

@@ -1,4 +1,4 @@
-import { captureSpeakers } from "./speech";
+import { captureSpeakers, type SpeechChunk } from "./speech";
 import { untilCanceled } from "./capture";
 import type { TranscriptSegment } from "./transcription";
 import type { makeRoomSession } from "./room";
@@ -9,13 +9,19 @@ export type MeetingTranscriptState = {
   roomName?: string;
   error: string;
   segments: readonly TranscriptSegment[];
+  base: number;
+  warning: string;
+  sharedStreamId?: string;
+  sharedCallId?: string;
+  sharedCursor?: number;
+  metrics?: { subscribers: number; sources: number; queued: number; jobs: number; delayMs: number };
 };
-type Media = Pick<ReturnType<typeof makeRoomSession>, "snapshot" | "subscribe" | "transcribe" | "setTranscribing">;
+type Media = Pick<ReturnType<typeof makeRoomSession>, "snapshot" | "subscribe" | "transcribe" | "captions" | "setTranscribing">;
 type Run = {
   callId: string;
   abort: AbortController;
-  context: AudioContext;
-  socket?: Awaited<ReturnType<Media["transcribe"]>>;
+  context?: AudioContext;
+  socket?: { close(): void; send?(chunk: SpeechChunk): void };
   recorder?: ReturnType<typeof captureSpeakers>;
   ready?: Promise<void>;
 };
@@ -23,7 +29,7 @@ type Run = {
 // One transcription stream per local call, independent of chat access or agents.
 export function makeMeetingTranscription(media: Media, audioContext = () => new AudioContext()) {
   const listeners = new Set<() => void>();
-  let state: MeetingTranscriptState = { phase: "idle", error: "", segments: [] };
+  let state: MeetingTranscriptState = { phase: "idle", error: "", segments: [], base: 0, warning: "" };
   let active: Run | undefined;
   function emit(next: Partial<MeetingTranscriptState>) {
     state = { ...state, ...next };
@@ -33,14 +39,14 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     const run = active; active = undefined;
     if (run) {
       run.abort.abort(); run.recorder?.close(); run.socket?.close();
-      void run.context.close().catch(() => {});
+      void run.context?.close().catch(() => {});
       void media.setTranscribing(run.callId, false).catch(() => {});
     }
     emit({ phase: error ? "error" : phase, error });
   }
   function reset() {
     stop();
-    emit({ phase: "idle", callId: undefined, roomName: undefined, error: "", segments: [] });
+    emit({ phase: "idle", callId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
   }
   function start() {
     const call = media.snapshot();
@@ -50,13 +56,33 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
       return Promise.resolve();
     }
     stop();
-    let context: AudioContext;
-    try { context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
+    let context: AudioContext | undefined;
+    try { if (!call.sharedTranscription) context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
     const run: Run = { callId: call.sessionId, abort: new AbortController(), context };
     active = run;
     emit({ phase: "starting", callId: call.sessionId, roomName: call.roomName, error: "", ...(state.callId !== call.sessionId ? { segments: [] } : {}) });
     run.ready = (async () => {
       try {
+        if (call.sharedTranscription) {
+          await media.setTranscribing(run.callId,true);
+          if (active !== run) return;
+          run.socket = await media.captions(run.abort.signal, packet => {
+            if (active !== run) return;
+            const sameStream = state.sharedStreamId === packet.streamId;
+            const previous = sameStream ? state.sharedCursor ?? 0 : 0;
+            const incoming = packet.segments.filter(segment => segment.seq > previous).map(segment => ({ ...segment, id: `${packet.streamId}:${segment.seq}` }));
+            const combined = [...state.segments, ...incoming];
+            const removed = Math.max(0, combined.length - 4000);
+            const warning = packet.error || (packet.gap || packet.dropped > 0 || (state.sharedStreamId && !sameStream) ? "Some speech is missing from the transcript. New speech will continue." : state.warning);
+            emit({ segments: combined.slice(removed), base: state.base + removed, sharedStreamId: packet.streamId, sharedCallId: packet.callId,
+              sharedCursor: packet.segments.at(-1)?.seq ?? previous, warning, metrics: packet.metrics,
+              phase: packet.phase === "recovering" ? "reconnecting" : packet.phase === "active" && state.phase === "reconnecting" ? "transcribing" : state.phase });
+          }, error => { if (active === run) stop(error); });
+          if (active !== run) { run.socket.close(); return; }
+          if (active === run) emit({ phase: "transcribing" });
+          return;
+        }
+        if (!context) throw new Error("Audio capture could not start.");
         // Resume from the explicit user gesture, before opening the speech socket.
         const resumed = context.resume();
         void resumed.catch(() => {});
@@ -71,7 +97,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
         if (context.state !== "running") throw new Error("Audio capture paused. Start transcription again from this meeting.");
         await media.setTranscribing(run.callId, true);
         if (active !== run) return;
-        run.recorder = captureSpeakers(context, chunk => { if (active === run) run.socket?.send(chunk); });
+        run.recorder = captureSpeakers(context, chunk => { if (active === run) run.socket?.send?.(chunk); });
         run.recorder.update(media.snapshot().participants);
         emit({ phase: "transcribing" });
       } catch (problem) {

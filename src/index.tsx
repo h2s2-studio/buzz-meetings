@@ -1,13 +1,18 @@
 import { makeLiveAgents, type AgentRuntime } from "./live-agents";
 import { makeMeetingTranscription } from "./meeting-transcription";
+import { meetingRecords } from "./meeting-records";
+import { recordsUI } from "./records-ui";
 import { transcriptUI } from "./transcript-ui";
 import type * as ReactRuntime from "react";
 import { makeRoomSession, type RoomSnapshot } from "./room";
 import { communityBroker, pluginId, socketUrl } from "./protocol";
 import { presets, type Preset } from "./capture";
+import { audioSettings } from "./audio-settings";
 import { cameraPermissions } from "./permissions";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
+import { readable, type Channel } from "./workspaces";
+import { workspaceProof } from "./workspace-voice";
 import type { Storage, WorkspaceSession } from "./workspaces";
 
 type Profile = { name?: string; picture?: string };
@@ -16,7 +21,7 @@ const emptyChannels: { channels: readonly ChatChannel[] } = { channels: [] };
 type Connection = { status?: string; origin?: string; viewer?: string; scope?: string;
   session: WorkspaceSession & { profiles: { snapshot(): ReadonlyMap<string, Profile>; subscribe(listener: () => void): () => void };
     channels?: { list(): { channels: readonly ChatChannel[] }; subscribeList(listener: () => void): () => void; ensureList?(): void };
-    channelCreation?: { available: boolean; create(input: { name: string; visibility: "open" }): Promise<string> };
+    channelCreation?: { available: boolean; create(input: { name: string; visibility: "open" | "private" }): Promise<string> };
     media?(url: string, size: "small"): string | undefined } };
 type Context = {
   react: typeof ReactRuntime;
@@ -72,10 +77,12 @@ export function apply(ctx: Context) {
   const { useEffect, useId, useRef, useState, useSyncExternalStore } = React;
   const media = makeRoomSession();
   const transcript = makeMeetingTranscription(media);
-  const Transcript = transcriptUI(React, transcript, media);
   const liveAgents = makeLiveAgents(ctx, media, transcript);
-  ctx.effect(() => () => transcript.close());
-  const workspaces = workspaceUI(ctx, liveAgents, media);
+  const records = meetingRecords(ctx.relay,ctx.artifactStorage);
+  const Records = recordsUI(React, records);
+  const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
+  ctx.effect(() => () => { transcript.close(); records.close(); });
+  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records });
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
   const storageKey = () => `studio.h2s2.meeting:${connection.scope || connection.origin}:${connection.viewer}:rooms`;
@@ -83,6 +90,7 @@ export function apply(ctx: Context) {
   let selected = rooms[0] || "";
   let broker = communityBroker(connection.origin) || "";
   let accessKey = "";
+  const audio = audioSettings(React,media,() => `${connection.scope}:${connection.viewer}`);
   let visible = 0;
   let stageChoice = "participants";
   let chatOpen = true;
@@ -92,8 +100,13 @@ export function apply(ctx: Context) {
   let preset: Preset = "balanced";
   let ui = { rooms, selected, broker, accessKey, visible, stageChoice, chatOpen, shareSound, roomPanel: roomPanel as RoomPanel, preset: preset as Preset, error: "" };
   const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+  function loadPresentation() {
+    try { const saved = JSON.parse(localStorage.getItem(`meetings-view:${connection.scope}:${connection.viewer}`) ?? "{}"); chatOpen = saved.chatOpen !== false; roomPanel = ["chat","agents","transcript"].includes(saved.roomPanel) ? saved.roomPanel : "chat"; preset = saved.preset === "sharp" ? "sharp" : "balanced"; shareSound = saved.shareSound === true; } catch { /* Use this session's defaults. */ }
+  }
+  loadPresentation();
   function publish(error = "") {
     ui = { rooms, selected, broker, accessKey, visible, stageChoice, chatOpen, shareSound, roomPanel, preset, error };
+    try { localStorage.setItem(`meetings-view:${connection.scope}:${connection.viewer}`,JSON.stringify({ chatOpen,roomPanel,preset,shareSound })); } catch { /* The current view remains usable. */ }
     for (const listener of listeners) listener();
   }
   function chooseStage(choice: string) {
@@ -106,7 +119,8 @@ export function apply(ctx: Context) {
       if (call.watching !== id || call.screens.length) media.changeWatch(id);
     } else media.changeWatch();
   }
-  function showPanel(panel: RoomPanel) { roomPanel = panel; chatOpen = true; publish(); }
+  function openTranscript() { if (media.snapshot().phase === "connected" && media.snapshot().transcription && transcript.snapshot().phase === "idle") void transcript.start(); }
+  function showPanel(panel: RoomPanel) { roomPanel = panel; chatOpen = true; publish(); if (panel === "transcript") openTranscript(); }
   function setChatOpen(value: boolean) { chatOpen = value; publish(); }
   function setShareSound(value: boolean) { shareSound = value; publish(); }
   function setPreset(value: Preset) { preset = value; publish(); }
@@ -144,13 +158,30 @@ export function apply(ctx: Context) {
       ...(accessKey ? { key: accessKey } : {}) });
     open();
   }
+  function roomChannel(room: string) {
+    const current = ctx.relay.snapshot(), call = media.snapshot();
+    const channels = current.session.channels?.list().channels.filter(channel => readable(channel,current.viewer)) ?? [];
+    if (call.workspaceChannelId) return channels.find(channel => channel.id === call.workspaceChannelId)?.id;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(`studio.h2s2.meetings:chat:${current.scope}:${roomKey(room)}`); } catch { /* A matching channel can still be used. */ }
+    const matches = channels.filter(channel => roomKey(channel.name) === roomKey(room));
+    return channels.find(channel => channel.id === saved)?.id ?? (matches.length === 1 ? matches[0].id : undefined);
+  }
+  async function joinWorkspace(channel: Channel) {
+    const current = ctx.relay.snapshot();
+    if (!current.origin || !current.viewer || current.status !== "ready" || !readable(channel, current.viewer)) throw new Error("Reconnect to this workspace before joining voice.");
+    if (media.snapshot().workspaceChannelId === channel.id && media.snapshot().phase !== "idle") return;
+    const service = socketUrl(broker), profile = current.session.profiles.snapshot().get(current.viewer);
+    media.leave(); stageChoice = "participants"; publish();
+    await media.connect(service, { type: "workspace", channel: channel.id, community: current.origin, room: channel.name, name: (profile?.name || "Participant").slice(0,48), picture: profile?.picture }, undefined, workspaceProof(current, ctx.relay.snapshot));
+  }
   ctx.effect(() => {
     const style = document.createElement("style"); style.textContent = css; document.head.append(style);
     const stop = ctx.relay.subscribe(() => {
       const next = ctx.relay.snapshot();
       if (next.scope !== connection.scope || next.viewer !== connection.viewer || next.origin !== connection.origin || next.session !== connection.session) {
         media.leave(); transcript.reset(); connection = next; rooms = readRooms(storageKey()); selected = rooms[0] || "";
-        broker = communityBroker(next.origin) || ""; accessKey = ""; stageChoice = "participants"; chatOpen = true; preset = "balanced"; roomPanel = "chat"; shareSound = false; publish();
+        broker = communityBroker(next.origin) || ""; accessKey = ""; stageChoice = "participants"; chatOpen = true; preset = "balanced"; roomPanel = "chat"; shareSound = false; audio.reset(); loadPresentation(); publish();
       } else connection = next;
     });
     return () => { stop(); media.leave(); style.remove(); };
@@ -184,15 +215,24 @@ export function apply(ctx: Context) {
   }
   function Roster({ call, tiles = false }: { call: RoomSnapshot; tiles?: boolean }) {
     const state = useUI();
-    return <ul className={tiles ? "meeting-tiles" : "meeting-roster"} aria-label={tiles ? "Meeting participants" : "Connected participants"}>
+    const listening = useSyncExternalStore(liveAgents.subscribe, liveAgents.snapshot);
+    const agents = [...(listening.members ?? []).map(agent => ({ ...agent, key:agent.sessionId })), ...call.participants.filter(person => !person.local).flatMap(person => (person.listeners ?? []).map(agent => ({ ...agent, key:`${person.id}:${agent.pubkey}`, phase:"listening" as const })))];
+    const openAgents = () => { if (call.workspaceChannelId) workspaces.open(call.workspaceChannelId,"agents"); else { showPanel("agents"); open(); } };
+    return <><ul className={tiles ? "meeting-tiles" : "meeting-roster"} aria-label={tiles ? "Meeting participants" : "Connected participants"}>
       {call.participants.map(person => <li key={person.id} data-speaking={person.speaking || undefined}>
         <button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant={state.stageChoice === `person:${person.id}` ? "prominent" : "ghost"} aria-label={`Show ${person.name}${person.local ? " (you)" : ""} on stage`} aria-pressed={state.stageChoice === `person:${person.id}`} onClick={() => chooseStage(`person:${person.id}`)}>
         {tiles && person.video ? <Video stream={person.video} label={`${person.name}’s camera`} /> : <Avatar person={person} large={tiles} />}
         <span className="meeting-person-name">{person.name}{person.local ? " (you)" : ""}</span></button>
-        {person.muted && <span className="meeting-muted" title="Muted"><Icon name="microphone" /><span className="sr-only">Muted</span></span>}
+        {person.muted && <span className="meeting-muted" title="Muted"><Icon name="microphoneOff" /><span className="sr-only">Muted</span></span>}
+        {!person.local && <ParticipantAudio person={person} />}
         {call.streams.some(stream => stream.presenterId === person.id) && <span className="meeting-live">Live</span>}
       </li>)}
-    </ul>;
+      {agents.map(agent => <li key={agent.key} className="meeting-agent-roster"><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-avatar" aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button><span className="meeting-live">{agent.phase === "starting" ? "Joining" : "Listening"}</span></li>)}
+    </ul>{!tiles && call.phase === "connected" && <Button label="Add agent" icon="plus" onClick={openAgents} />}</>;
+  }
+  function ParticipantAudio({ person }: { person: RoomSnapshot["participants"][number] }) {
+    const id = useId(), [value,setValue] = useState(Math.round(media.volume(person.id)*100));
+    return <><Button label={`Audio for ${person.name}`} icon="headphones" iconOnly variant="ghost" popoverTarget={id} /><div id={id} popover="auto" className="meeting-participant-audio text-body-sm" role="dialog" aria-label={`${person.name} audio`}><label>{person.name} volume<input type="range" min="0" max="100" value={value} aria-label={`${person.name} volume`} onChange={event => { const next = Number(event.target.value); setValue(next); media.setVolume(person.id,next/100); }} /></label><span className="text-caption">{value}%</span><Button label="Close participant audio" icon="close" iconOnly variant="ghost" popoverTarget={id} popoverTargetAction="hide" /></div></>;
   }
   function SharingControl({ call }: { call: RoomSnapshot }) {
     const state = useUI();
@@ -220,7 +260,7 @@ export function apply(ctx: Context) {
       <div ref={drawer} id={id} popover="auto" className="meeting-sharing-drawer text-body-sm" role="dialog" aria-label="Screen sharing" data-buzz-ui="">
         <header className="meeting-sharing-heading"><h3 className="text-body-sm">Screen sharing</h3><Button label="Close sharing options" icon="close" iconOnly variant="ghost" popoverTarget={id} popoverTargetAction="hide" /></header>
         {call.sharing && <div className="meeting-drawer-preview"><Video stream={call.sharing.preview} label="Selected screen preview" /><p className="text-caption text-subtle">{call.sharing.label}</p></div>}
-        <label className="meeting-sharing-field">Share quality<select className="buzz-input" value={state.preset} disabled={call.picking} onChange={event => setPreset(event.target.value as Preset)}>{Object.entries(presets).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
+        <label className="meeting-sharing-field">Quality for next source<select className="buzz-input" value={state.preset} disabled={call.picking} onChange={event => setPreset(event.target.value as Preset)}>{Object.entries(presets).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
         <p className="text-caption text-subtle">Choose a screen or window in the system picker. Your microphone is controlled separately.</p>
         {call.screenAudio ? <><label className="meeting-sharing-sound"><input type="checkbox" checked={state.shareSound} disabled={call.picking} onChange={event => setShareSound(event.target.checked)} />Share sound when available</label><p className="text-caption text-metadata">Sound support depends on your system and the source you choose. This applies to your next source selection.</p></> : <p className="text-caption text-metadata">Sound sharing requires an updated meeting service.</p>}
         {call.sharing?.sound && <p className="text-caption" role="status">Sharing screen sound</p>}
@@ -241,6 +281,7 @@ export function apply(ctx: Context) {
     return <div className="meeting-callbar" role="group" aria-label="Meeting controls" data-compact={compact || undefined}>
       <span className="sr-only" role="status">{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span>
       <Button label={call.muted ? "Unmute" : "Mute"} icon={call.muted ? "microphoneOff" : "microphone"} iconOnly active={call.muted} disabled={busy || call.phase !== "connected" || call.deafened} onClick={() => { void change(() => media.setMuted(!call.muted)); }} />
+      <audio.AudioSettings />
       <Button label={call.deafened ? "Undeafen" : "Deafen"} icon={call.deafened ? "headphonesOff" : "headphones"} iconOnly active={call.deafened} disabled={busy || call.phase !== "connected"} onClick={() => { void change(() => media.setDeafened(!call.deafened)); }} />
       <Button label={call.cameraPhase === "choosing" ? "Cancel camera" : call.cameraPhase === "publishing" ? "Starting camera…" : call.camera ? "Camera off" : "Camera on"} icon={call.camera ? "camera" : "cameraOff"} iconOnly active={call.camera} disabled={busy || call.phase !== "connected" || call.cameraPhase === "publishing"} onClick={() => { if (call.cameraPhase) media.cancelCamera(); else void media.setCamera(!call.camera); }} />
       {listening.phase !== "idle" && <Button label="Stop live listening" icon="agent" iconOnly active onClick={() => liveAgents.stop()} />}
@@ -355,6 +396,7 @@ export function apply(ctx: Context) {
   }
   function RoomChat({ room }: { room: string }) {
     const savedWorkspaces = workspaces.useState();
+    const call = useCall();
     const { roomPanel } = useUI();
     const current = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
     const session = current.session;
@@ -368,7 +410,7 @@ export function apply(ctx: Context) {
     let saved: string | null = null;
     try { saved = localStorage.getItem(key); } catch { /* Use a matching joined channel. */ }
     const matches = channels.filter(channel => roomKey(channel.name) === roomKey(room));
-    const chosen = channels.find(channel => channel.id === (linked?.key === key ? linked.id : saved)) ?? (matches.length === 1 ? matches[0] : undefined);
+    const chosen = channels.find(channel => channel.id === (call.workspaceChannelId ?? (linked?.key === key ? linked.id : saved))) ?? (matches.length === 1 ? matches[0] : undefined);
     const Workspace = ctx.conversation.ui.Workspace;
     function link(id: string) {
       if (!channels.some(channel => channel.id === id)) return;
@@ -379,7 +421,7 @@ export function apply(ctx: Context) {
       if (!session.channelCreation?.available || pending) return;
       setPending(true); setError("");
       try {
-        const id = await session.channelCreation.create({ name: room, visibility: "open" });
+        const id = await session.channelCreation.create({ name: room, visibility: "private" });
         if (ctx.relay.snapshot().session !== session) return;
         try { localStorage.setItem(key, id); } catch { /* Keep this visit usable. */ }
         setLinked({ key, id });
@@ -391,43 +433,45 @@ export function apply(ctx: Context) {
         : <><header className="panel-header"><div className="panel-header-label"><Icon name="chat" /><h2>Room chat</h2></div></header><div className="meeting-chat-setup text-body-sm">
           {!Workspace ? <p>Turn on Channels to use Buzz’s room conversation here.</p> : <><p className="text-subtle">Keep the conversation going alongside {room}.</p>
             <label>Room conversation<select className="buzz-input" disabled={pending} value="" onChange={event => link(event.target.value)}><option value="">Choose a joined channel…</option>{channels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label>
-            {session.channelCreation?.available && <><Button label={pending ? "Creating…" : "Create open channel"} disabled={pending} onClick={() => { void create(); }} /><p className="text-caption text-metadata">Everyone in this community can discover an open channel.</p></>}
+            {session.channelCreation?.available && <><Button label={pending ? "Creating…" : "Create private conversation"} disabled={pending} onClick={() => { void create(); }} /><p className="text-caption text-metadata">Only invited members can access this conversation.</p></>}
           </>}{error && <p role="alert" className="text-danger">{error}</p>}
         </div></>}
     </aside>;
   }
   function Page({ navigation }: { navigation?: PageNavigation }) {
-    const state = useUI(); const call = useCall(); const video = useRef<HTMLDivElement>(null);
+    const state = useUI(); const call = useCall();
     const transcriptTrigger = useRef<HTMLButtonElement>(null);
     const workspace = workspaces.useState();
-    const [fullscreenError, setFullscreenError] = useState("");
-    const { preset, chatOpen } = state;
-    const stageChoice = state.stageChoice;
+    const chatOpen = state.chatOpen;
     useEffect(() => { visible++; publish(); return () => { visible--; publish(); }; }, []);
     const connected = call.phase === "connected";
-    const watching = call.streams.find(stream => stream.id === call.watching);
-    const person = call.participants.find(person => stageChoice === `person:${person.id}`);
-    const localScreen = stageChoice === "your-screen" && call.sharing;
-    const remoteScreen = stageChoice.startsWith("screen:") && call.video;
-    const allScreens = stageChoice === "all-screens" && call.screens.length > 0;
-
-    function fullscreen() {
-      const element = video.current;
-      if (element?.requestFullscreen) void element.requestFullscreen().catch(() => setFullscreenError("Fullscreen isn’t available in this window."));
-      else setFullscreenError("Fullscreen isn’t available in this window.");
-    }
     const route = navigation?.target.route?.params ?? navigation?.target.params;
     if (workspace.selected || workspaces.validRoute(route)) return <workspaces.Content navigation={navigation}>
       {call.phase !== "idle" && <div className="meeting-workspace-callbar"><Button label={`Return to ${call.roomName}`} icon="headphones" variant="ghost" onClick={() => { workspaces.clear(); open(); }} /><Controls call={call} /></div>}
     </workspaces.Content>;
     return <section className="meeting-page text-body" data-buzz-ui="" aria-label="Meeting">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{call.participants.length ? `${call.participants.length} participant${call.participants.length === 1 ? "" : "s"}` : state.selected ? "Voice channel" : ""}</span></div></div>
-        <div className="panel-header-actions">{(localScreen || person?.video || remoteScreen || allScreens) && <Button label="Fullscreen" icon="expand" iconOnly variant="ghost" onClick={fullscreen} />}<Button ref={transcriptTrigger} label={chatOpen && state.roomPanel === "transcript" ? "Hide transcript" : "Show transcript"} icon="transcript" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "transcript"} onClick={() => { if (chatOpen && state.roomPanel === "transcript") setChatOpen(false); else showPanel("transcript"); }} /><Button label="Meeting agents" icon="agent" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "agents"} onClick={() => { if (chatOpen && state.roomPanel === "agents") setChatOpen(false); else showPanel("agents"); }} /><Button label={chatOpen && state.roomPanel === "chat" ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "chat"} onClick={() => { if (chatOpen && state.roomPanel === "chat") setChatOpen(false); else showPanel("chat"); }} /><Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
+        <div className="panel-header-actions"><Button ref={transcriptTrigger} label={chatOpen && state.roomPanel === "transcript" ? "Hide transcript" : "Show transcript"} icon="transcript" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "transcript"} onClick={() => { if (chatOpen && state.roomPanel === "transcript") setChatOpen(false); else showPanel("transcript"); }} /><Button label="Meeting agents" icon="agent" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "agents"} onClick={() => { if (chatOpen && state.roomPanel === "agents") setChatOpen(false); else showPanel("agents"); }} /><Button label={chatOpen && state.roomPanel === "chat" ? "Hide room chat" : "Show room chat"} icon="chat" iconOnly variant="ghost" active={chatOpen && state.roomPanel === "chat"} onClick={() => { if (chatOpen && state.roomPanel === "chat") setChatOpen(false); else showPanel("chat"); }} />{call.phase === "idle" && <audio.AudioSettings />}<Button label="Connection settings" icon="settings" iconOnly variant="ghost" onClick={openSettings} /></div>
       </header>
       {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span>{!call.cameraDenied && <Button label="Connection settings" variant="ghost" onClick={openSettings} />}</div>}
       {call.cameraDenied && connected && <CameraAccess />}
       {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
-      {call.participants.some(person => person.transcribing || person.listener) && <div className="meeting-listener-status text-caption" role="status"><Icon name="transcript" />{call.participants.some(person => person.transcribing) && <span>Live transcription via {call.participants.filter(person => person.transcribing).map(person => person.name).join(", ")}</span>}{call.participants.some(person => person.listener) && <span>{call.participants.filter(person => person.listener).map(person => `${person.listener} is listening via ${person.name}`).join(" · ")}</span>}</div>}
+      {(call.transcriptActive || call.participants.some(person => person.transcribing || person.listener)) && <div className="meeting-listener-status text-caption" role="status"><Icon name="transcript" />{call.transcriptActive && <span>Shared transcription active</span>}{call.participants.some(person => person.transcribing) && <span>Live transcription via {call.participants.filter(person => person.transcribing).map(person => person.name).join(", ")}</span>}{call.participants.some(person => person.listener) && <span>{call.participants.filter(person => person.listener).map(person => `${person.listener} is listening via ${person.name}`).join(" · ")}</span>}</div>}
+      <MeetingBody closePanel={() => { setChatOpen(false); transcriptTrigger.current?.focus(); }} />
+    </section>;
+  }
+  function WorkspaceRoster() { const call = useCall(); return <Roster call={call} />; }
+  function WorkspaceCall() { return <MeetingBody panels={false} />; }
+  function MeetingBody({ panels = true, closePanel }: { panels?: boolean; closePanel?: () => void }) {
+    const state = useUI(), call = useCall(), video = useRef<HTMLDivElement>(null);
+    const [fullscreenError, setFullscreenError] = useState("");
+    const transcriptTrigger = useRef<HTMLButtonElement>(null);
+    const { preset, stageChoice } = state, chatOpen = panels && state.chatOpen;
+    const connected = call.phase === "connected", watching = call.streams.find(stream => stream.id === call.watching);
+    const person = call.participants.find(person => stageChoice === `person:${person.id}`);
+    const localScreen = stageChoice === "your-screen" && call.sharing, remoteScreen = stageChoice.startsWith("screen:") && call.video;
+    const allScreens = stageChoice === "all-screens" && call.screens.length > 0;
+    return <>{/* The stage and controls share ownership across all meeting views. */}
       <div className="meeting-body" data-chat-open={(chatOpen && !!(call.roomName || state.selected)) || undefined}><div className="meeting-content">
         <div className="meeting-stage" ref={video}>
           {localScreen ? <div className="meeting-focused-screen"><Video stream={localScreen.preview} label="Your screen on stage" /></div>
@@ -435,16 +479,16 @@ export function apply(ctx: Context) {
             :
           allScreens ? <div className="meeting-screen-grid">{call.screens.map(screen => <button type="button" className="meeting-screen-tile" key={screen.id} aria-label={`Focus ${screen.presenter}’s screen`} onClick={() => chooseStage(`screen:${screen.id}`)}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></button>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div>
             : remoteScreen ? <div className="meeting-focused-screen"><Video stream={remoteScreen} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen</span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
-            : call.participants.length ? <Roster call={call} tiles /> : call.phase === "connecting" ? <div className="meeting-empty" role="status"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Joining {call.roomName}…</h3><p className="text-body-sm text-subtle">Connecting to the room and preparing your microphone.</p><Button label="Cancel joining" icon="close" onClick={() => media.leave()} /></div> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Create a voice channel to start a conversation."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage voice channels"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Your microphone turns on when you join.</span>}</div>}
-          {fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}
+            : call.participants.length ? <Roster call={call} tiles /> : call.phase === "connecting" ? <div className="meeting-empty" role="status"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Joining {call.roomName}…</h3><p className="text-body-sm text-subtle">Connecting to the room and preparing your microphone.</p><Button label="Cancel joining" icon="close" onClick={() => media.leave()} /></div> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Create a voice channel to start a conversation."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage voice channels"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Join with your saved audio settings.</span>}</div>}
+          {(localScreen || person?.video || remoteScreen || allScreens) && <Button label="Fullscreen" icon="expand" iconOnly onClick={() => { void video.current?.requestFullscreen?.().catch(() => setFullscreenError("Fullscreen isn’t available in this window.")); }} />}{fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}
         </div>
         {(call.streams.length > 0 || call.sharing) && <aside className="meeting-streams" aria-label="Live streams"><div className="meeting-streams-header"><h3 className="text-caption text-metadata">Screen sharing</h3>{call.streams.length > 1 && <Button label="Watch all screens" icon="screen" iconOnly variant="ghost" onClick={() => chooseStage("all-screens")} />}</div>
           {call.sharing && <div className="meeting-preview"><button type="button" className="meeting-preview-select" aria-label="Show your screen on stage" aria-pressed={stageChoice === "your-screen"} onClick={() => chooseStage("your-screen")}><Video stream={call.sharing.preview} label="Your stream preview" /></button><div className="meeting-preview-caption"><span className="text-caption text-subtle">{call.sharing.label} · Your screen</span><Button label="Change source" icon="screen" iconOnly variant="ghost" disabled={call.picking || call.stopping || !connected} onClick={() => { void media.share(preset, state.shareSound); }} /></div></div>}
           {call.streams.map(stream => <button className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={stageChoice === `screen:${stream.id}` || undefined} type="button" key={stream.id} aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={stageChoice === `screen:${stream.id}`} disabled={!connected} onClick={() => chooseStage(`screen:${stream.id}`)}><Icon name="screen" /><span className="navigation-item-label">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></button>)}
         </aside>}
-      </div>{chatOpen && !!(call.roomName || state.selected) && (state.roomPanel === "transcript" ? <Transcript roomName={call.roomName || state.selected} close={() => { setChatOpen(false); transcriptTrigger.current?.focus(); }} /> : <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />)}</div>
+      </div>{chatOpen && !!(call.roomName || state.selected) && (state.roomPanel === "transcript" ? <Transcript roomName={call.roomName || state.selected} close={() => { if (closePanel) closePanel(); else setChatOpen(false); }} /> : <RoomChat key={`${connection.scope}:${call.roomName || state.selected}`} room={call.roomName || state.selected} />)}</div>
       {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span></div><Controls call={call} /></footer>}
-    </section>;
+    </>;
   }
   function Toolbar() {
     const call = useCall(); const state = useUI();

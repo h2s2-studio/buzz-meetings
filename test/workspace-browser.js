@@ -54,6 +54,7 @@ export async function fixtureWorkspaceHost({ viewer, realm }) {
       snapshotRead: (filters, { signal } = {}) => request("read", { filters }, signal),
       configArtifactWriter: { kinds: [45010], sign: (template, signal) => request("sign", { template }, signal), publish: (event, signal) => request("publish", { event }, signal) },
       channelDetails: { available: true, load: (id, signal) => request("details", { id }, signal), save: (base, draft, signal, active) => active && !active() ? Promise.reject(new Error("Scope changed")) : request("rename", { base, draft }, signal), check: async () => {}, snapshot: () => undefined },
+      memberAdditions: { add: (id,pubkey,options) => request("control",{grant:{id,viewer:pubkey,role:options?.role ?? "bot"}}) },
       channelCreation: { available: true, create: input => request("create", input) },
     },
     close() { events.close(); subscribers.clear(); },

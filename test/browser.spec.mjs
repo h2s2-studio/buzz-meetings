@@ -388,13 +388,13 @@ test("keeps icon controls reachable and sharing choices explicit across pane siz
   expect(await page.evaluate(() => meetingTest.captureStates())).toEqual([]);
   const box = await drawer.boundingBox(), anchor = await trigger.boundingBox();
   expect(box.y + box.height).toBeLessThanOrEqual(anchor.y);
-  await drawer.getByLabel("Share quality").selectOption("sharp");
+  await drawer.getByLabel("Quality for next source").selectOption("sharp");
   await page.keyboard.press("Escape"); await expect(drawer).not.toBeVisible(); await expect(trigger).toBeFocused();
   await page.getByRole("button", { name: "Hide room chat", exact: true }).click();
   await page.getByRole("button", { name: "Messages", exact: true }).click();
   const toolbar = page.getByRole("toolbar", { name: "Buzz toolbar" });
   await toolbar.getByRole("button", { name: "Share screen", exact: true }).click();
-  await expect(drawer.getByLabel("Share quality")).toHaveValue("sharp");
+  await expect(drawer.getByLabel("Quality for next source")).toHaveValue("sharp");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(page.getByRole("button", { name: "Show room chat", exact: true })).toBeVisible();
@@ -413,7 +413,7 @@ test("assigns an agent task through native chat, reviews membership separately a
   await agents.getByText("Send a written task", { exact: true }).click();
   await agents.getByLabel("Agent", { exact: true }).selectOption("d".repeat(64));
   await expect(agents.getByRole("button", { name: "Send task", exact: true })).toBeDisabled();
-  await agents.getByRole("button", { name: "Add or manage agents", exact: true }).click();
+  await agents.getByRole("button", { name: "Manage access", exact: true }).click();
   expect((await page.evaluate(() => meetingTest.navigationTargets())).at(-1)).toMatchObject({ kind: "conversation", panel: "members", channelId: general });
   expect(await page.evaluate(() => meetingTest.taskRequests())).toEqual([]);
   await agents.getByLabel("Agent", { exact: true }).selectOption("b".repeat(64));
@@ -442,7 +442,7 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   test.setTimeout(90000);
   let speechConnections = 0;
   page.on("websocket", socket => socket.on("framesent", event => {
-    try { if (JSON.parse(event.payload).type === "listen") speechConnections++; } catch { /* Other host/media frames. */ }
+    try { if (["listen", "captions"].includes(JSON.parse(event.payload).type)) speechConnections++; } catch { /* Other host/media frames. */ }
   }));
   const other = await context.newPage();
   await Promise.all([page.goto(`${fixture}?realm=live-agent&agents&speech&viewer=Alex`), other.goto(`${fixture}?realm=live-agent&speech&viewer=Riley`)]);
@@ -450,12 +450,10 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   await expect(controls(page).getByRole("status")).toHaveText("Voice connected");
   await expect(controls(other).getByRole("status")).toHaveText("Voice connected");
   await page.getByRole("button", { name: "Show transcript", exact: true }).click();
-  await page.getByRole("complementary", { name: "Meeting transcript", exact: true }).getByRole("button", { name: "Start transcription", exact: true }).click();
   await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
   const panel = page.getByRole("region", { name: "Meeting agents", exact: true });
-  await panel.getByLabel("Agent", { exact: true }).selectOption("b".repeat(64));
-  await panel.getByRole("button", { name: "Start live agent", exact: true }).click();
-  await expect(panel.getByRole("status")).toContainText("receiving speaker-attributed live speech", { timeout: 15000 });
+  await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks", { timeout: 15000 });
   expect(speechConnections).toBe(1);
   await expect.poll(() => page.evaluate(() => meetingTest.agentWakes().length), { timeout: 45000 }).toBeGreaterThan(0);
   const wakes = await page.evaluate(() => meetingTest.agentWakes());
@@ -478,26 +476,25 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   const task = { session_id, key: "research-open-questions", title: "Research open questions", status: "working" };
   await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), task);
   await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), { ...task, status: "done", result: "Research summary posted in the channel’s notes." });
-  await expect(panel).toContainText("done · published");
+  await expect(panel).toContainText("Done · Saved in chat");
   const messages = (await page.evaluate(() => meetingTest.workspaceState())).messages[general];
   expect(messages.at(-1)).toMatchObject({ viewer: "b".repeat(64) });
   expect(messages.at(-1).text).toContain("Research summary");
   if (test.info().project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-live-agent.png" });
-  await panel.getByRole("button", { name: "Stop listening", exact: true }).click();
+  await panel.getByRole("button", { name: "Remove Research helper from call", exact: true }).click();
   await expect(stage(other).getByRole("status").filter({ hasText: "Research helper is listening via Alex" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "Stop listening", exact: true })).toHaveCount(0);
-  await expect(stage(other).getByRole("status").filter({ hasText: "Live transcription via Alex" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
+  await expect(stage(other).getByRole("status").filter({ hasText: /Live transcription via.*Alex/ })).toBeVisible();
   await page.getByRole("button", { name: "Show transcript", exact: true }).click();
   const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   await expect(transcript.getByRole("status")).toHaveText("Transcribing");
   await expect(transcript.getByRole("region", { name: "Transcript entries" })).toContainText(/research|notes/i);
   await transcript.getByRole("button", { name: "Pause transcription", exact: true }).click();
-  await expect(stage(other).getByRole("status").filter({ hasText: "Live transcription via Alex" })).toHaveCount(0);
+  await expect(stage(other).getByRole("status").filter({ hasText: /Live transcription via.*Alex/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
   // Panel remounts intentionally: choose the agent for a fresh assignment.
-  await panel.getByLabel("Agent", { exact: true }).selectOption("b".repeat(64));
-  await panel.getByRole("button", { name: "Start live agent", exact: true }).click();
-  await expect(panel.getByRole("status")).toContainText("receiving speaker-attributed live speech");
+  await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks");
   await controls(page).getByRole("button", { name: "Pause transcription", exact: true }).click();
   await expect(panel.getByRole("alert")).toContainText("transcription paused");
   await expect(controls(page).getByRole("button", { name: "Stop live listening", exact: true })).toHaveCount(0);
@@ -509,7 +506,10 @@ test("delivers overlapping live speakers to an agent with timestamps and records
 test("transcribes a room without an agent or linked channel and preserves text across navigation, pause and leave", async ({ page, context }) => {
   test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for independent transcripts");
   test.setTimeout(90000);
-  const other = await context.newPage();
+  const other = await context.newPage(), timelines = [[],[]], metrics = [{},{}];
+  for (const [i,client] of [page,other].entries()) client.on("websocket",socket => socket.on("framereceived",frame => {
+    try { const value=JSON.parse(frame.payload); if(value.type === "captions") { timelines[i].push(...value.segments.map(row => ({...row,id:`${value.streamId}:${row.seq}`}))); metrics[i]=value.metrics; } } catch { /* Other media frames. */ }
+  }));
   await Promise.all([page.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Alex`), other.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Riley`)]);
   const roomName = "Unlinked call";
   for (const client of [page, other]) {
@@ -521,13 +521,20 @@ test("transcribes a room without an agent or linked channel and preserves text a
   }
   await page.getByRole("button", { name: "Show transcript", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
-  await panel.getByRole("button", { name: "Start transcription", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   const entries = panel.getByRole("region", { name: "Transcript entries", exact: true });
   await expect(entries).toContainText("Alex", { timeout: 45000 });
   await expect(entries).toContainText("Riley", { timeout: 45000 });
   await expect(entries).toContainText(/research|notes/i);
   await expect(entries).toContainText(/design|Friday/i);
+  await other.getByRole("button",{name:"Show transcript",exact:true}).click();
+  await expect.poll(() => metrics[0].subscribers).toBe(2);
+  await expect.poll(() => metrics[1].subscribers).toBe(2);
+  await expect.poll(() => timelines[1].length).toBeGreaterThan(0);
+  const common=timelines[0].find(row => timelines[1].some(other => other.id===row.id));
+  expect(common).toBeTruthy(); expect(timelines[1].find(row=>row.id===common.id)).toEqual(common);
+  expect(metrics[0].sources).toBe(2); expect(metrics[1].sources).toBe(2);
+  await test.info().attach("shared-speech-metrics",{body:JSON.stringify(metrics,null,2),contentType:"application/json"});
   for (const size of [{ width: 960, height: 720 }, { width: 530, height: 780 }]) {
     await page.setViewportSize(size);
     const box = await entries.boundingBox();
@@ -541,14 +548,15 @@ test("transcribes a room without an agent or linked channel and preserves text a
   expect(await entries.locator("time").first().getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   expect(await page.evaluate(() => meetingTest.taskRequests())).toEqual([]);
   expect(await page.evaluate(() => meetingTest.agentWakes())).toEqual([]);
-  await expect(stage(other).getByRole("status").filter({ hasText: "Live transcription via Alex" })).toBeVisible();
+  await expect(stage(other).getByRole("status").filter({ hasText: /Live transcription via.*Alex/ })).toBeVisible();
   await page.getByRole("button", { name: "Messages", exact: true }).click();
   await expect(page.getByRole("toolbar", { name: "Buzz toolbar" }).getByRole("button", { name: "Pause transcription", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   await panel.getByRole("button", { name: "Pause transcription", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Paused");
-  await expect(stage(other).getByRole("status").filter({ hasText: "Live transcription via Alex" })).toHaveCount(0);
+  await expect(stage(other).getByRole("status").filter({ hasText: /Live transcription via.*Alex/ })).toHaveCount(0);
+  await expect.poll(() => metrics[1].subscribers).toBe(1);
   const count = await entries.getByRole("listitem").count();
   await panel.getByRole("button", { name: "Resume transcription", exact: true }).click();
   await expect.poll(() => entries.getByRole("listitem").count(), { timeout: 45000 }).toBeGreaterThan(count);
@@ -603,4 +611,51 @@ test("shares sound independently of the microphone and stops it with viewing, so
   await page.evaluate(() => meetingTest.releaseScreen());
   await expect.poll(() => page.evaluate(() => meetingTest.screenAudioStates())).toEqual(["ended", "ended", "ended"]);
   for (const client of [page, other]) await controls(client).getByRole("button", { name: "Leave room", exact: true }).click();
+});
+
+
+test("remembers join-muted audio settings and preserves an unsent agent request",async ({page}) => {
+  test.skip(!upstream,"Needs real call transport");
+  await page.goto(`${fixture}?realm=simple-audio&agents`);
+  await page.getByRole("button",{name:"Audio settings",exact:true}).click();
+  const audio=page.getByRole("dialog",{name:"Audio settings",exact:true});
+  await audio.getByLabel("Join with microphone muted").check();
+  await page.keyboard.press("Escape"); await page.reload();
+  await join(page).click(); await expect(controls(page).getByRole("button",{name:"Unmute",exact:true})).toBeVisible();
+  await sidebar(page).getByRole("button",{name:"Add agent",exact:true}).click();
+  const agents=page.getByRole("region",{name:"Meeting agents",exact:true});
+  await agents.getByText("Send a written task",{exact:true}).click();
+  await agents.getByLabel("Agent",{exact:true}).selectOption("b".repeat(64));
+  await agents.getByLabel("Request",{exact:true}).fill("Keep this draft while I check the transcript.");
+  await page.getByRole("button",{name:"Show transcript",exact:true}).click();
+  await page.getByRole("button",{name:"Meeting agents",exact:true}).click();
+  await agents.getByText("Send a written task",{exact:true}).click();
+  await expect(agents.getByLabel("Request",{exact:true})).toHaveValue("Keep this draft while I check the transcript.");
+  await controls(page).getByRole("button",{name:"Leave room",exact:true}).click();
+});
+
+test("adds two agents directly as call members with one transcription connection",async ({page}) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH,"Needs real speech transport"); test.setTimeout(90000);
+  let connections=0; page.on("websocket",socket=>socket.on("framesent",frame=>{try{if(["captions","listen"].includes(JSON.parse(frame.payload).type)) connections++;}catch{}}));
+  await page.goto(`${fixture}?realm=multi-agents&agents&multi-agents&speech`); await join(page).click();
+  await sidebar(page).getByRole("button",{name:"Add agent",exact:true}).click();
+  const agents=page.getByRole("region",{name:"Meeting agents",exact:true});
+  await agents.getByRole("button",{name:"Add Research helper to call",exact:true}).click();
+  await expect(agents.getByRole("button",{name:"Remove Research helper from call",exact:true})).toBeVisible();
+  await agents.getByRole("button",{name:"Add New helper to call",exact:true}).click();
+  await expect(agents.getByRole("button",{name:"Remove New helper from call",exact:true})).toBeVisible();
+  expect(connections).toBe(1);
+  await expect(sidebar(page).getByRole("button",{name:"Research helper · Listening",exact:true})).toBeVisible();
+  await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
+  expect((await page.evaluate(()=>meetingTest.taskRequests())).filter(task=>task.text.includes("Live meeting session:")).length).toBe(2);
+  await agents.getByRole("button",{name:"Remove Research helper from call",exact:true}).click();
+  await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Show transcript",exact:true}).click();
+  const transcript=page.getByRole("complementary",{name:"Meeting transcript",exact:true});
+  await expect(transcript.getByRole("region",{name:"Transcript entries"})).toContainText(/research|notes/i,{timeout:45000});
+  await transcript.getByRole("button",{name:"Save meeting record",exact:true}).click();
+  await expect(transcript).toContainText("Saved in this workspace’s Meeting records.");
+  const saved=(await page.evaluate(()=>meetingTest.workspaceState())).records.filter(event=>event.tags.some(tag=>tag[0]==="type" && tag[1]==="studio.h2s2.meetings.record"));
+  expect(saved).toHaveLength(1);
+  await controls(page).getByRole("button",{name:"Leave room",exact:true}).click();
 });

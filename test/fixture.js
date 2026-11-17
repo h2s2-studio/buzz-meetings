@@ -12,7 +12,8 @@ let connection = { status: "ready", viewer, origin, scope: origin + ":" + viewer
 let meetingOwnerRoot; const sendObservers = new Set();
 const agentTools = new Map(), agentWakes = [], agentInstructions = [];
 const fixtureAgent = { key: "b".repeat(64), pubkey: "b".repeat(64), name: "Research helper", owner: viewer, place: "here" };
-const nativeAgents = { snapshot: () => ({ agents: [fixtureAgent], running: [fixtureAgent] }), subscribe: () => () => {}, wake(key, input) { agentWakes.push({ key, ...input }); }, addInstructions(input) { agentInstructions.push(input); }, addTool(tool) { agentTools.set(tool.name, tool); } };
+const runtimeAgents = [fixtureAgent, ...(query.has("multi-agents") ? [{ ...fixtureAgent,key:"d".repeat(64),pubkey:"d".repeat(64),name:"New helper" }] : [])];
+const nativeAgents = { snapshot: () => ({ agents: runtimeAgents, running: runtimeAgents }), subscribe: () => () => {}, wake(key, input) { agentWakes.push({ key, ...input }); }, addInstructions(input) { agentInstructions.push(input); }, addTool(tool) { agentTools.set(tool.name, tool); } };
 const navigationTargets = [], taskRequests = [], agentListeners = new Set();
 let agentActivity = { status: "listening", turns: [], local: [] };
 if (query.has("agents")) {

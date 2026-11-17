@@ -1,51 +1,49 @@
-# Live transcripts
+# Live transcripts and meeting records
 
-Open **Transcript** from the meeting header, then choose **Start transcription**.
-A transcript works in any supported voice room, including rooms with no linked
-chat or agent. Joining a call alone does not start transcription.
+Open **Transcript** to start following the call. No agent is required. Joining
+voice alone does not start transcription; opening the transcript is the explicit
+action. A paused transcript stays paused until **Resume transcription**.
 
-Each microphone remains a separate source. Entries show the speaker and time;
-overlapping speech keeps its source identity. Text arrives after a short pause
-or a bounded speech segment, rather than word by word. The room shows which
-participant is transcribing. Other people can start their own local transcript;
-the current service does not broadcast one shared transcript to every viewer.
+The service joins the call once and subscribes to separate microphone tracks.
+Every viewer receives the same ordered entries with stable IDs, speaker labels
+and start/end times, including overlapping speech. Adding viewers or agents
+reuses the stream. Entries arrive after a pause or roughly eight seconds of
+continued speech. The call shows the service's transcription presence.
 
-**Pause transcription** stops this device's transcription and new input to its
-live agent. **Stop listening** detaches the agent while transcription continues.
-Neither action leaves voice or cancels tasks already running. Use native
-**Stop task** for existing agent work. Closing Transcript or browsing Messages
-keeps transcription running; the compact call controls retain a pause action.
+**Pause transcription** detaches this viewer and its agents. Other viewers can
+continue transcribing. Removing an agent leaves transcription running and stops
+its new speech input; native **Stop task** controls work already assigned.
+Closing the panel or browsing other content preserves the connection.
 
-Text remains available after pausing and leaving the call. Joining another call,
-rejoining, changing community or identity, disabling the plugin, and reloading
-clear this local buffer. It holds at most 2,000 segments and stops visibly when
-full. This build has no permanent transcript archive, export, or editing flow.
-Recognition can make mistakes; display names identify media participants rather
-than verifying a Buzz identity.
+Use search, **Copy**, or **Download** to work with the current text. **Save meeting
+record** deliberately saves a snapshot to the linked channel, with task results
+and native message references. Saved records are available in that workspace's
+**Meeting records** view. Saving requires write access. Signed chunks are
+journaled before publication; an interrupted save offers a retry of those exact
+bytes. The manifest is saved last and every publication is read back before
+claiming success. A record never silently changes to a replacement chunk.
 
-At wide pane sizes, Transcript appears beside the stage. At smaller sizes,
-Transcript, Agents and Chat use the available content area; close the selected
-panel to return to the stage. The call controls remain visible below it.
+Unsaved text uses a bounded 4,000-entry window. The service retains at most 16
+recent room timelines for up to 30 minutes; this is temporary memory, not a
+permanent archive. Leaving preserves the device's text until another call,
+identity/community change or reload. A new media room occurrence gets a new
+stream. Replay gaps, worker restarts, failed recognition and overload show a
+notice rather than claiming a complete transcript. Saving records only the text
+available in the current buffer and preserves any coverage warning. Saved
+artifacts follow channel access and history retention; this build offers no
+per-record purge of artifact history. Raw audio is processed in memory.
 
-## Ownership
+The private CPU worker defaults to pinned faster-whisper `base.en`. It permits
+four active rooms, bounds each room's queue to eight chunks, drops work older
+than 15 seconds, and serializes recognition globally. These are resource bounds,
+not a measured promise that four busy calls meet realtime latency. Physical
+microphones, accents/noise, constrained networks and production load remain
+acceptance tests. Recognition can make mistakes.
 
-- `room.ts` owns the voice connection, microphone publications, capability
-  discovery, and the room's participant metadata.
-- `speech.ts` owns per-source speech segmentation and WAV encoding.
-- `transcription.ts` owns the bounded broker connection and response parsing.
-- `meeting-transcription.ts` owns one local transcription stream for the active
-  call, its buffer, cancellation, pause/resume, and reconnection state. It does
-  not depend on channels, agent inventory, or the native agent runner.
-- `live-agents.ts` subscribes to new transcript segments only after its explicit
-  owner assignment is confirmed. Agent stop does not dispose the shared local
-  transcription controller. It retains its channel/identity/thread checks.
-- `transcript-ui.tsx` renders the buffer and controls. Mounting or closing this
-  view does not acquire or release audio.
+Workspace participants have signed Buzz admission identities. Display names still
+come from profiles, and ordinary quick rooms use unverified media identities.
+Speech never expands an agent's permissions.
 
-Transcription and agent metadata updates are serialized so clearing one status
-does not erase the other. Late startup completions are retired after cancellation.
-Calls, transcripts and assignments retain distinct identities and lifetimes.
-
-The optional speech service and deployment procedure remain in
-[live-agents.md](live-agents.md). No service rollout is needed for this client
-separation when the deployed broker already advertises transcription support.
+Older brokers retain the client-capture fallback. It supports an independent
+local transcript but does not share the service timeline. Update both broker and
+worker for shared transcription; see [deployment](deployment.md).

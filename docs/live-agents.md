@@ -1,18 +1,22 @@
 # Live meeting agents (development build)
 
-Live agents are enabled explicitly from **Meeting agents** in a voice room linked
-to a Buzz channel. Choose one of your agents that is running on this device and
-already has channel access. Select **Take notes and propose tasks** or **Create
-and carry out tasks**, review its mission, and choose **Start live agent**.
+Choose **Add agent** beneath the call roster, then **Add** beside an eligible
+agent. It appears as a listening call member and can receive spoken tasks. Role
+and mission are optional under **Agent settings**; the default carries out agreed
+tasks within existing permissions. Adding an agent without channel access also
+adds that access, explained in the chooser before the action. Inventory alone
+is not readiness: live agents must belong to you and run on this device.
 
-The room shows who is listening through which participant. The plugin captures
-one microphone stream per media participant; a separate speech service returns
-transcript segments with source IDs and start/end times. Overlapping speakers
-remain separate. Display names identify media participants but do not prove a
-Buzz identity or authorize commands. Agent actions follow the role you enabled
-and the harness's existing permissions.
+Up to four agents can consume the same service transcript. Each gets its own
+confirmed native owner assignment and thread. No human credentials pass to the
+broker. Other participants see the included agents in the roster. Workspace
+Agents resolves the same active call as its Voice view.
 
-Start live agent starts or reuses the call’s independent transcription stream and sends one explicit owner assignment through Buzz’s native Outbox. The agent receives new speech only after that assignment is confirmed. Later transcript notifications continue that same task thread. Open **Transcript** to follow the call without selecting an agent; see [Live transcripts](transcription.md).
+The shared service preserves separate microphone identities and speech times,
+including overlap. Signed workspace admission identifies the participant's Buzz
+key; display names are presentation and speech does not authorize extra actions.
+Quick rooms keep their legacy media identities. See [transcripts](transcription.md)
+for retention, replay and deliberate saving.
 
 The agent receives context through Buzz's public plugin wake and tool APIs.
 `meetings_live_context` exposes only the selected agent's authorized channel and
@@ -20,7 +24,7 @@ session. `meetings_task_record` records proposals or progress and publishes in t
 that agent through its native client. These calls do not borrow the owner's
 signer. Native Activity shows actual execution and provides Stop controls.
 
-**Stop listening** ends new agent input and notifications while the call’s
+**Remove** ends new agent input and notifications while the call’s
 transcription continues. **Pause transcription** stops this device’s capture and
 also ends live-agent input. Neither action cancels tasks already running; use
 **Stop task** for those. Leaving voice, changing community or disabling Meetings
@@ -36,8 +40,7 @@ and language can be changed in the private speech service configuration. No
 external transcription account is required; initial model download is from
 Hugging Face, and inference runs on your machine. The broker forwards bounded
 16 kHz mono WAV segments over loopback. Audio and live transcript buffers are
-held in memory. Task posts and agent results remain in native Buzz chat; this
-version does not create a permanent full-call transcript archive.
+held in memory. Task posts and agent results remain in native Buzz chat; saved snapshots can retain the current transcript in channel artifacts.
 
 Segments close after a pause or roughly eight seconds of continued speech.
 The speech service and agent execution add latency; this is not word-by-word

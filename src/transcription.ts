@@ -1,6 +1,6 @@
 import { socketUrl, type RoomRequest } from "./protocol";
 import { wav16, type SpeechChunk } from "./speech";
-export type TranscriptSegment = { seq: number; speakerId: string; speakerName: string; startedAt: number; endedAt: number; text: string };
+export type TranscriptSegment = { id?: string; seq: number; speakerId: string; speakerName: string; startedAt: number; endedAt: number; text: string };
 export function openTranscription(broker: string, request: Extract<RoomRequest, { type: "meeting" }>, signal: AbortSignal, receive: (segments: TranscriptSegment[]) => void, failed: (error: string) => void) {
   return new Promise<{ send(chunk: SpeechChunk): void; close(): void }>((resolve, reject) => {
     const socket = new WebSocket(socketUrl(broker));

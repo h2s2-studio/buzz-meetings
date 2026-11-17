@@ -1,3 +1,5 @@
+mod captions;
+pub mod workspaces;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -34,6 +36,8 @@ const PROXY_KEY_HEADER: &str = "x-buzz-streams-proxy-key";
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Request {
+    Workspace(workspaces::WorkspaceRequest),
+    Service,
     Create {
         name: String,
         key: Option<String>,
@@ -41,6 +45,13 @@ enum Request {
     Join {
         name: String,
         code: String,
+    },
+    Captions {
+        name: String,
+        community: String,
+        room: String,
+        picture: Option<String>,
+        key: Option<String>,
     },
     Listen {
         name: String,
@@ -64,6 +75,7 @@ enum Reply<'a> {
     Admitted {
         url: &'a str,
         token: String,
+        room: String,
         capabilities: Capabilities,
         #[serde(skip_serializing_if = "Option::is_none")]
         invite: Option<Invite>,
@@ -78,6 +90,7 @@ enum Reply<'a> {
 struct Capabilities {
     screen_audio: bool,
     transcription: bool,
+    shared_transcription: bool,
 }
 
 #[derive(Serialize)]
@@ -103,6 +116,7 @@ pub struct RoomService {
     transcription_url: Option<Url>,
     transcription_jobs: Semaphore,
     http: reqwest::Client,
+    workspace_access: Option<Arc<workspaces::WorkspaceAccess>>,
 }
 
 impl RoomService {
@@ -117,7 +131,24 @@ impl RoomService {
             handshakes: Arc::new(Semaphore::new(MAX_HANDSHAKES)),
             transcription_url: None,
             transcription_jobs: Semaphore::new(4),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .expect("HTTP client"),
+            workspace_access: None,
+        }
+    }
+
+    pub fn with_workspace_access(mut self, access: workspaces::WorkspaceAccess) -> Self {
+        self.workspace_access = Some(Arc::new(access));
+        self
+    }
+
+    fn capabilities(&self, meeting: bool) -> Capabilities {
+        Capabilities {
+            screen_audio: meeting,
+            transcription: meeting && self.transcription_url.is_some(),
+            shared_transcription: meeting && self.transcription_url.is_some(),
         }
     }
 
@@ -129,6 +160,51 @@ impl RoomService {
     pub fn with_proxy_key(mut self, key: &str) -> Self {
         self.proxy_key_digest = Some(Sha256::digest(key.as_bytes()).into());
         self
+    }
+
+    fn media_token(
+        &self,
+        name: &str,
+        room_name: &str,
+        metadata: &str,
+        meeting: bool,
+        identity: &str,
+    ) -> Result<String, &'static str> {
+        AccessToken::with_api_key(&self.api_key, &self.api_secret)
+            .with_identity(identity)
+            .with_name(name)
+            .with_metadata(metadata)
+            .with_ttl(Duration::from_secs(90))
+            .with_grants(VideoGrants {
+                room: room_name.to_owned(),
+                room_join: true,
+                can_subscribe: Some(true),
+                can_publish: Some(true),
+                can_publish_sources: if meeting {
+                    vec![
+                        "microphone".into(),
+                        "camera".into(),
+                        "screen_share".into(),
+                        "screen_share_audio".into(),
+                    ]
+                } else {
+                    vec!["screen_share".into()]
+                },
+                can_publish_data: Some(false),
+                can_update_own_metadata: Some(meeting),
+                ..Default::default()
+            })
+            .with_room_config(RoomConfiguration {
+                max_participants: 13,
+                empty_timeout: 120,
+                departure_timeout: 20,
+                ..Default::default()
+            })
+            .to_jwt()
+            .map_err(|_| {
+                tracing::error!("could not sign media admission");
+                "Could not issue media admission."
+            })
     }
 
     fn trusted_proxy(&self, headers: &HeaderMap) -> bool {
@@ -151,15 +227,29 @@ impl RoomService {
         now: u64,
         trusted_proxy: bool,
     ) -> Result<Reply<'_>, &'static str> {
+        if matches!(&request, Request::Workspace(_) | Request::Service) {
+            return Err("Workspace admission requires a signed challenge.");
+        }
         let mut invitations = self
             .invitations
             .lock()
             .map_err(|_| "Room service unavailable.")?;
         invitations.retain(|_, room| room.expires_at > now);
-        let meeting = matches!(&request, Request::Meeting { .. } | Request::Listen { .. });
+        let meeting = matches!(
+            &request,
+            Request::Meeting { .. } | Request::Listen { .. } | Request::Captions { .. }
+        );
         let mut metadata = None;
         let (name, room_name, invite) = match request {
+            Request::Workspace(_) | Request::Service => return Err("Invalid room request."),
             Request::Meeting {
+                name,
+                community,
+                room,
+                picture,
+                key,
+            }
+            | Request::Captions {
                 name,
                 community,
                 room,
@@ -244,46 +334,18 @@ impl RoomService {
         if name.is_empty() || name.chars().count() > 48 || name.chars().any(char::is_control) {
             return Err("Enter a display name of 1–48 characters.");
         }
-        let token = AccessToken::with_api_key(&self.api_key, &self.api_secret)
-            .with_identity(&random_code())
-            .with_name(name)
-            .with_metadata(&metadata.unwrap_or_default())
-            .with_ttl(Duration::from_secs(90))
-            .with_grants(VideoGrants {
-                room: room_name.clone(),
-                room_join: true,
-                can_subscribe: Some(true),
-                can_publish: Some(true),
-                can_publish_sources: if meeting {
-                    vec![
-                        "microphone".into(),
-                        "camera".into(),
-                        "screen_share".into(),
-                        "screen_share_audio".into(),
-                    ]
-                } else {
-                    vec!["screen_share".into()]
-                },
-                can_publish_data: Some(false),
-                can_update_own_metadata: Some(meeting),
-                ..Default::default()
-            })
-            .with_room_config(RoomConfiguration {
-                max_participants: 12,
-                empty_timeout: 120,
-                departure_timeout: 20,
-                ..Default::default()
-            })
-            .to_jwt()
-            .map_err(|_| {
-                tracing::error!("could not sign media admission");
-                "Could not issue media admission."
-            })?;
+        let token = self.media_token(
+            name,
+            &room_name,
+            &metadata.unwrap_or_default(),
+            meeting,
+            &random_code(),
+        )?;
         if let Some(invite) = &invite {
             invitations.insert(
                 invite.code.clone(),
                 Room {
-                    name: room_name,
+                    name: room_name.clone(),
                     expires_at: invite.expires_at,
                 },
             );
@@ -291,9 +353,11 @@ impl RoomService {
         Ok(Reply::Admitted {
             url: self.livekit_url.as_str(),
             token,
+            room: room_name,
             capabilities: Capabilities {
                 screen_audio: meeting,
                 transcription: meeting && self.transcription_url.is_some(),
+                shared_transcription: meeting && self.transcription_url.is_some(),
             },
             invite,
         })
@@ -309,10 +373,14 @@ fn matches_key(expected: &[u8; 32], supplied: &[u8]) -> bool {
 }
 
 pub fn router(rooms: RoomService) -> Router {
+    let rooms = Arc::new(rooms);
+    if rooms.workspace_access.is_some() {
+        tokio::spawn(workspaces::guard(rooms.clone()));
+    }
     Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route("/rooms", get(upgrade))
-        .with_state(Arc::new(rooms))
+        .with_state(rooms)
 }
 
 async fn upgrade(
@@ -343,6 +411,22 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let request = serde_json::from_str::<Request>(&message);
+    match request {
+        Ok(Request::Workspace(input)) => {
+            workspaces::serve(&mut socket, rooms, &message, input).await;
+            return;
+        }
+        Ok(Request::Service) => {
+            let workspace = rooms.workspace_access.as_ref();
+            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin())});
+            let _ = socket.send(Message::Text(value.to_string().into())).await;
+            return;
+        }
+        _ => {}
+    }
+    let shared = request
+        .as_ref()
+        .is_ok_and(|request| matches!(request, Request::Captions { .. }));
     let listening = request
         .as_ref()
         .is_ok_and(|request| matches!(request, Request::Listen { .. }));
@@ -350,7 +434,16 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
         .map_err(|_| "Invalid room request.")
         .and_then(|request| rooms.admit(request, now.as_millis() as u64, trusted_proxy))
         .unwrap_or_else(|error| Reply::Error { error });
-    if listening && matches!(&reply, Reply::Admitted { .. }) {
+    if shared {
+        match reply {
+            Reply::Admitted { room, .. } => captions::serve(&mut socket, &rooms, &room, None).await,
+            error => {
+                if let Ok(text) = serde_json::to_string(&error) {
+                    let _ = socket.send(Message::Text(text.into())).await;
+                }
+            }
+        }
+    } else if listening && matches!(&reply, Reply::Admitted { .. }) {
         if rooms.transcription_url.is_none() {
             let _ = socket.send(Message::Text(r#"{"type":"error","error":"Live transcription is not configured on this meeting service."}"#.into())).await;
         } else {

@@ -3,7 +3,8 @@ import type { makeRoomSession } from "./room";
 import type * as ReactRuntime from "react";
 import { meetingAgents, type ConversationTarget } from "./agents-ui";
 import { makeWorkspaces, readable, writable, uuid, type Channel, type Storage, type WorkspaceConnection, type Workspaces, type WorkspaceState } from "./workspaces";
-import { pluginId } from "./protocol";
+import { meetingService, type MeetingService } from "./workspace-voice";
+import { communityBroker, pluginId } from "./protocol";
 
 export type PageNavigation = { target: { route?: { params?: unknown }; params?: Readonly<Record<string, string>>; scope?: { viewer: string; communityOrigin: string } | null } };
 export type ConversationProps = { id: string; session: WorkspaceConnection["session"]; scope: string; target: { channelId: string }; label: string; actions?: readonly { label: string; run(): void }[] };
@@ -21,7 +22,7 @@ export const validWorkspaceRoute = (params: unknown) => !!params && typeof param
 const empty: WorkspaceState = { workspaces: [], busy: "", error: "", pending: [], loading: true };
 const noPanels: readonly PanelContribution[] = [];
 
-export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>) {
+export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }> }) {
   const React = ctx.react;
   const Agents = meetingAgents(ctx, liveAgents, media);
   const { useEffect, useState, useSyncExternalStore } = React;
@@ -49,7 +50,9 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     proposed = id;
     void ctx.navigation.open({ version: 1, kind: "settings", section: `${pluginId}/workspaces` });
   }
-  function open(id: string) {
+  let viewRequest: { id:string; view:"agents" | "transcript" | "call"; sequence:number } | undefined;
+  function open(id: string, view?: "agents" | "transcript" | "call") {
+    if (view) { viewRequest={id,view,sequence:(viewRequest?.sequence ?? 0)+1}; state={...state}; for (const listener of listeners) listener(); }
     const current = ctx.relay.snapshot();
     if (!current.viewer || !current.origin) return;
     controller?.select(id);
@@ -60,9 +63,10 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
   }
   function Sidebar() {
     const current = useStateSnapshot();
+    const call = useSyncExternalStore(media?.subscribe ?? subscribe, media?.snapshot ?? (() => undefined));
     return <nav className="navigation-section meeting-workspace-navigation" aria-label="Shared workspaces">
       <header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Workspaces</h2><span className="navigation-section-heading-actions"><Action aria-label="Manage workspaces" onClick={() => manage()}>+</Action></span></header>
-      {current.workspaces.map(channel => <button key={channel.id} className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={current.selected === channel.id || undefined} aria-current={current.selected === channel.id ? "page" : undefined} type="button" onClick={() => open(channel.id)}><span className="navigation-item-label">{channel.name}</span></button>)}
+      {current.workspaces.map(channel => <React.Fragment key={channel.id}><button key={channel.id} className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={current.selected === channel.id || undefined} aria-current={current.selected === channel.id ? "page" : undefined} type="button" onClick={() => open(channel.id)}><span className="navigation-item-label">{channel.name}</span></button>{voice && call?.workspaceChannelId === channel.id && call.phase !== "idle" && <voice.Roster />}</React.Fragment>)}
       {!current.workspaces.length && <p className="meeting-workspace-hint text-caption text-metadata">{current.loading ? "Loading workspaces…" : "Link a channel to keep its chat, notes and files here."}</p>}
       {current.pending.length > 0 && <Action onClick={() => manage()}>Review {current.pending.length} saved {current.pending.length === 1 ? "link" : "links"}</Action>}
       {(current.error || current.syncError) && <p className="meeting-workspace-hint text-caption text-danger" role="status">{current.error || current.syncError}</p>}
@@ -98,7 +102,9 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const saved = useStateSnapshot();
     const live = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
     const panels = useSyncExternalStore(ctx.panels.subscribe ?? subscribe, ctx.panels.snapshot ?? (() => noPanels));
-    const [surface, setSurface] = useState<"notes" | "chat" | "agents">("notes");
+    const call = useSyncExternalStore(media?.subscribe ?? subscribe, media?.snapshot ?? (() => undefined));
+    const [surface, setSurface] = useState<"notes" | "chat" | "agents" | "call" | "transcript" | "records">("notes");
+    const [service, setService] = useState<MeetingService>(), [voiceError, setVoiceError] = useState(""), [joining, setJoining] = useState(false);
     const params = navigation?.target.route?.params ?? navigation?.target.params;
     const route = validWorkspaceRoute(params) ? (params as { workspace: string }).workspace : undefined;
     const routeScope = navigation?.target.scope;
@@ -108,17 +114,45 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const channel = live.session.channels?.list().channels.find(channel => channel.id === id);
     const workspace = saved.workspaces.find(channel => channel.id === id);
     const access = sameScope && live.status === "ready" && readable(channel, live.viewer) && !!workspace;
+    const inCall = !!call && call.workspaceChannelId === id && call.phase !== "idle";
+    useEffect(() => {
+      setService(undefined); setVoiceError("");
+      const abort = new AbortController();
+      if (voice && access && voice.broker() === communityBroker(live.origin)) void meetingService(voice.broker(), abort.signal).then(setService).catch(problem => { if (!abort.signal.aborted) setVoiceError(problem.message); });
+      return () => abort.abort();
+    }, [live.session, id, access]);
+    useEffect(() => { if (inCall) setSurface("call"); }, [inCall]);
+    useEffect(() => { if (viewRequest && viewRequest.id === id) setSurface(viewRequest.view); }, [id,viewRequest?.sequence]);
+    const enabled = !!service?.workspaceVoice && service.community === live.origin && !!service.identity && !!channel?.members?.includes(service.identity);
+    const canEnable = !!live.session.memberAdditions && ["owner","admin"].includes(channel?.viewerRole ?? "");
+    async function joinVoice() {
+      if (!voice || !channel || joining) return;
+      setJoining(true); setVoiceError("");
+      try {
+        if (!enabled) {
+          if (!service?.identity || service.community !== live.origin || !service.workspaceVoice || !live.session.memberAdditions) throw new Error("Workspace voice is unavailable on this service.");
+          await live.session.memberAdditions.add(channel.id, service.identity, { role: "guest" });
+        }
+        if (ctx.relay.snapshot().session !== live.session) return;
+        await voice.join(channel); setSurface("call");
+      } catch (problem) { setVoiceError(problem instanceof Error ? problem.message : "Couldn’t join workspace voice."); }
+      finally { setJoining(false); }
+    }
     const Canvas = panels.find(panel => panel.id === "canvas" && panel.pluginId === "buzz.channels")?.component;
     const Conversation = ctx.conversation.ui.Workspace;
     return <section className="meeting-page meeting-workspace-page text-body" data-buzz-ui="" aria-label="Persistent workspace">
-      <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><h2>{access ? channel!.name : "Workspace"}</h2><span className="text-caption text-metadata">{access && !writable(channel, live.viewer) ? "Read only" : "Shared workspace"}</span></div></div><div className="panel-header-actions"><Action onClick={() => manage(access ? id : "")}>Workspace settings</Action></div></header>
+      <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><h2>{access ? channel!.name : "Workspace"}</h2><span className="text-caption text-metadata">{access && !writable(channel, live.viewer) ? "Read only" : "Shared workspace"}</span></div></div><div className="panel-header-actions">{access && voice && !inCall && <Action disabled={joining || !service?.workspaceVoice || service.community !== live.origin || (!enabled && !canEnable)} onClick={() => { void joinVoice(); }}>{joining ? "Joining…" : !service?.workspaceVoice ? "Voice unavailable" : enabled ? "Join voice" : "Enable voice & join"}</Action>}<Action onClick={() => manage(access ? id : "")}>Workspace settings</Action></div></header>
       {!access ? <div className="meeting-workspace-unavailable" role="status"><p>{live.status !== "ready" ? "Reconnect to load this workspace. Saved content cannot establish current channel access." : saved.loading ? "Loading the saved workspace…" : "This workspace is unavailable. It may still be synchronizing, archived, removed, or outside your current channel access."}</p><Action onClick={() => { void controller?.refresh(); }}>Check workspace</Action></div> : <>
-        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views"><Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action></div>
+        {voiceError && <p role="alert" className="meeting-transcript-notice text-danger">{voiceError}</p>}
+        {service && !service.workspaceVoice && <p className="meeting-workspace-footnote text-caption text-metadata">Workspace voice needs to be enabled on your meeting service.</p>}
+        {service?.workspaceVoice && !enabled && <p className="meeting-workspace-footnote text-caption text-metadata">{!canEnable && "A channel owner or admin needs to enable voice. "}Enabling voice adds the Meetings service to this channel as a guest. It can verify members and transcribe the call, with access to channel history and files.</p>}
+        {inCall && call?.error && <p role="alert" className="text-danger">{call.error}</p>}
+        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}<Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
         <div className="meeting-workspace-surface" key={`${live.scope}:${id}`}>
-          {surface === "agents" ? <Agents channelId={channel!.id} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
+          {surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : surface === "transcript" && voice && inCall ? <voice.Transcript roomName={call!.roomName!} close={() => setSurface("call")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
             : Conversation && live.scope ? <Conversation id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
-        </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and files stay with this channel after the call. Calls in shared workspaces are coming next.</p>
-      </>}{children}
+        </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and task results stay with this channel after the call.</p>
+      </>}{inCall && surface === "call" ? null : children}
     </section>;
   }
   ctx.settingsCards.register({ id: "workspaces", title: "Meeting workspaces", component: Management });

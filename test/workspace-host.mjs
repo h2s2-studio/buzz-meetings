@@ -78,7 +78,7 @@ export function client(host, viewer = identities.Alex) {
         return { entries: entries.filter(entry => definition.project(entry).some(row => row.index === index && row.value === value)) };
       },
       async refreshError() { return null; }, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-      preferences: { async get(id) { return structuredClone(values.get(id)); }, async update(id, change) { if (host.storageFailure) throw new Error("Disk full"); const next = change(structuredClone(values.get(id))); values.set(id, structuredClone(next)); handle.notify(); } },
+      preferences: { async get(id) { return structuredClone(values.get(definition.name === "workspaces" ? id : `${definition.name}:${id}`)); }, async update(id, change) { if (host.storageFailure) throw new Error("Disk full"); const next = change(structuredClone(values.get(definition.name === "workspaces" ? id : `${definition.name}:${id}`))); values.set(definition.name === "workspaces" ? id : `${definition.name}:${id}`, structuredClone(next)); handle.notify(); } },
       close() { handles.delete(handle); listeners.clear(); },
     };
   } };

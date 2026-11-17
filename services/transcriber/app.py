@@ -4,6 +4,13 @@ import asyncio
 import io
 import os
 import wave
+import time
+from contextlib import suppress
+from pydantic import BaseModel, Field
+try:
+    from .rooms import RoomTranscripts
+except ImportError:
+    from rooms import RoomTranscripts
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
@@ -24,8 +31,15 @@ async def lifespan(app):
         cpu_threads=int(os.getenv("WHISPER_THREADS", "2")),
         download_root=os.getenv("WHISPER_MODEL_DIR", "/models"),
     )
-    yield
-    model = None
+    reaper = asyncio.create_task(room_transcripts.reap())
+    try:
+        yield
+    finally:
+        reaper.cancel()
+        with suppress(asyncio.CancelledError):
+            await reaper
+        await room_transcripts.close()
+        model = None
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -72,5 +86,53 @@ async def transcribe(request: Request):
             raise HTTPException(413, "Audio exceeds ten seconds")
     if model is None:
         raise HTTPException(503, "Speech model is loading")
+    return await recognize_room(bytes(data))
+
+
+async def recognize_room(data):
+    # Canceling a viewer must not release the CPU slot while its native inference
+    # thread is still running. Keep the semaphore until that work actually ends.
     async with inference:
-        return await asyncio.to_thread(recognize, bytes(data))
+        job = asyncio.create_task(asyncio.to_thread(recognize, data))
+        try:
+            return await asyncio.shield(job)
+        except asyncio.CancelledError:
+            await job
+            raise
+
+
+room_transcripts = RoomTranscripts(recognize_room)
+
+
+class RoomLease(BaseModel):
+    room: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+    lease: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+    url: str = Field(max_length=2048)
+    token: str = Field(max_length=8192)
+
+
+@app.post("/sessions")
+async def acquire_room(input: RoomLease):
+    if model is None:
+        raise HTTPException(503, "Speech model is loading")
+    try:
+        return await room_transcripts.acquire(input.room, input.lease, input.url, input.token)
+    except RuntimeError as problem:
+        raise HTTPException(503, str(problem)) from problem
+
+
+@app.get("/sessions/{name}")
+async def room_snapshot(name: str, lease: str, after: int = 0, stream: str | None = None):
+    room = room_transcripts.rooms.get(name)
+    if room is None or lease not in room.leases:
+        raise HTTPException(404, "The transcription session ended")
+    room.leases[lease] = time.monotonic()
+    return room.snapshot(max(0, after), stream)
+
+
+@app.delete("/sessions/{name}")
+async def release_room(name: str, lease: str):
+    room = room_transcripts.rooms.get(name)
+    if room is not None:
+        await room.release(lease)
+    return {"released": True}

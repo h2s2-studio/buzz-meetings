@@ -1,37 +1,42 @@
 # Meetings experience and architecture
 
-Meetings is a Buzz dock app with an app-specific sidebar. The Voice Channels
-section and General Voice exist on first launch. An explicit room click starts
-microphone capture and joins its named media session. Connected people appear
-beneath the active room and in the main stage, with speaking and mute state.
+A persistent meeting destination is a Buzz channel. Its voice room derives from
+the community origin and channel UUID, so a rename keeps the same destination.
+Notes, conversation, agents, transcript and saved records are views of that
+workspace. Opening a workspace never requests a microphone; **Join voice** does.
+Legacy name-based quick rooms remain compatible personal shortcuts.
 
-One plugin-lifetime LiveKit session owns audio playback, microphone/camera
-capture, screen publishing, and video subscriptions. Changing pages does not
-change that lifetime. Leaving or changing identity/community immediately stops
-local tracks, tears down playback, and disconnects the room. A canceled join
-also stops a late microphone permission result. Room switching waits for the
-previous transport teardown before connecting the next session.
+One plugin-lifetime LiveKit session owns microphone/camera publication, playback
+and screen subscriptions. Changing views keeps it alive. Leaving, changing
+identity/community or disabling the plugin stops owned tracks immediately. Late
+capture results are retired independently of transport cleanup.
 
-The Rust broker hashes a canonical community origin and normalized room name
-into a stable LiveKit destination. A short-lived token grants microphone,
-camera, and screen-video publication only for that destination. A deployment
-access key or trusted private proxy is required for each admission. Tokens use
-random participant IDs; profile names/pictures are presentation supplied by
-clients. This is independent of native Huddles and does not verify Buzz channel
-membership. Do not present these profile names as cryptographically verified.
+Workspace admission binds a native signature to a fresh challenge, the exact
+request and channel. The broker checks current relay-signed channel state through
+its own ordinary service identity. Explicit **Enable voice & join** adds that
+identity as a channel guest; it does not borrow a human or agent's credentials.
+The broker verifies membership periodically and removes revoked participants.
+Quick rooms retain the existing access-key/trusted-proxy boundary and unverified
+random media identities.
 
-Screen publishers choose a source explicitly. Viewers can focus one presenter
-and select quality layers, or watch several screens in a grid. Stopping a share
-keeps voice connected. The screen source picker belongs to the OS; changing it
-preserves the existing source if canceled. The app never shows controls for
-unimplemented application-audio capture.
+The speech worker owns one microphone subscription per source per call, one
+ordered timeline and bounded queues. Viewers use replay cursors; agents consume
+that transcript after a confirmed native owner assignment. Each agent keeps one
+thread, coalesces notifications while busy, and publishes task progress with its
+own client. Up to four eligible local agents can be included in a call. A
+listening badge is distinct from actual native runner activity and useful output.
 
-The initial room list is local to the viewer/community/device. General Voice
-is common to everyone; additional names resolve to the same server destination
-when another member adds that name. Shared room administration and live
-cross-room occupancy are future work, as are application audio and native agent participation. Room text chat reuses
-Buzz’s conversation Workspace: a uniquely named joined channel links
-automatically, and other rooms offer explicit channel linking/creation.
-Buzz owns the reader, composer, attachments, and text permissions. The product reference is Discord's
-persistent voice rooms and stream stage; this release does not claim complete
-feature parity.
+Primary actions are direct: join voice; open Transcript; add an agent from the
+roster; share through an upward drawer; save a transcript deliberately. Role and
+mission customization are optional. Saved audio choices include device and
+join-muted settings. A microphone test and participant volume controls use only
+available web APIs; unsupported output switching uses system settings.
+
+Buzz owns chat, attachments, Canvas editing, native task execution, Outbox and
+channel membership. Meetings stores its own presentation preferences and unsent
+agent request drafts. Saved meeting records use signed native artifacts with
+journaled intent, readback and exact-revision references.
+
+This architecture uses the plugin and adjacent Meetings services. It requires no
+Buzz desktop fork. A physical-device session and a real native agent completing
+a spoken task remain separate release evidence from browser contract fixtures.

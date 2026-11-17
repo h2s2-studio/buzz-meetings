@@ -22,3 +22,8 @@ url.workspace = true
 livekit-api = { version = "0.10.1", default-features = false, features = ["access-token"] }
 livekit-protocol = "0.8.2"
 reqwest.workspace = true
+nostr = { version = "0.44", features = ["nip98"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
