@@ -2,7 +2,7 @@ import { makeLiveAgents, type AgentRuntime } from "./live-agents";
 import { makeMeetingTranscription } from "./meeting-transcription";
 import { meetingRecords } from "./meeting-records";
 import { recordsUI } from "./records-ui";
-import { memoryArtifactStore, type ArtifactStore } from "./artifact-store";
+import { memoryArtifactStore, recordArtifacts, type ArtifactStore } from "./artifact-store";
 import { documentsUI, type OpenTarget } from "./documents-ui";
 import { transcriptUI } from "./transcript-ui";
 import type * as ReactRuntime from "react";
@@ -94,7 +94,7 @@ export function apply(ctx: Context) {
   let documentTarget: OpenTarget | undefined, editing = false;
   function setDocument(target?: OpenTarget) { documentTarget = target; publish(); }
   function openDocument(target: OpenTarget) { setDocument(target); workspaces.open(target.channelId, "documents"); }
-  const artifactsFor = (channelId: string, occurrenceId?: string) => occurrenceId ? artifactStore.list(channelId).filter(item => item.head.content.occurrenceId === occurrenceId).map(item => ({ id: item.id, kind: item.kind, title: item.title, revision: item.head.id, number: item.head.number })) : [];
+  const artifactsFor = (channelId: string, occurrenceId?: string) => recordArtifacts(artifactStore, channelId, occurrenceId);
   const Records = recordsUI(React, records, (channelId, messageId) => {
     const live = ctx.relay.snapshot();
     if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });
@@ -102,7 +102,7 @@ export function apply(ctx: Context) {
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel, artifacts: { artifactsFor } });
   function WorkspaceDocuments({ channelId }: { channelId: string }) { useUI(); return <documents.DocumentsTab channelId={channelId} target={documentTarget} setTarget={setDocument} />; }
   ctx.effect(() => () => { transcript.close(); records.close(); });
-  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, Documents: WorkspaceDocuments, transcript, records,
+  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, Documents: WorkspaceDocuments, documentsPreview: !artifactStore.durable, transcript, records,
     temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() },
     presence: workspacePresence, AudioCheck: () => <audio.AudioSettings inline /> });
   const listeners = new Set<() => void>();

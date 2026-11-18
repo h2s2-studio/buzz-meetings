@@ -36,7 +36,7 @@ async function digest(value: string) { return hex(new Uint8Array(await crypto.su
  * current head as `prev`. `signer()` returns who signs the next revision; tests use
  * `remote` to land a concurrent revision as someone else.
  */
-export function memoryArtifactStore(signer: () => string | undefined) {
+export function memoryArtifactStore(signer: () => string | undefined, options: { durable?: boolean } = {}) {
   const revisions = new Map<string, Revision[]>(), listeners = new Set<() => void>();
   let summaries = new Map<string, readonly ArtifactSummary[]>();
   const key = (channelId: string, artifactId: string) => `${channelId}\u0000${artifactId}`;
@@ -53,7 +53,7 @@ export function memoryArtifactStore(signer: () => string | undefined) {
     return revision;
   }
   const store = {
-    durable: false,
+    durable: options.durable === true,
     list(channelId: string) {
       let value = summaries.get(channelId);
       if (!value) {
@@ -79,3 +79,13 @@ export function memoryArtifactStore(signer: () => string | undefined) {
   return store satisfies ArtifactStore & Record<string, unknown>;
 }
 export type MemoryArtifactStore = ReturnType<typeof memoryArtifactStore>;
+
+/**
+ * Documents and boards a meeting record should reference: those made in this call,
+ * with their current revision. Records are permanent, so a store that keeps nothing
+ * across restarts contributes nothing (its references would dangle).
+ */
+export function recordArtifacts(store: ArtifactStore, channelId: string, occurrenceId?: string) {
+  if (!store.durable || !occurrenceId) return [];
+  return store.list(channelId).filter(item => item.head.content.occurrenceId === occurrenceId).map(item => ({ id: item.id, kind: item.kind, title: item.title, revision: item.head.id, number: item.head.number }));
+}

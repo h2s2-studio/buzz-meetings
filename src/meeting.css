@@ -375,3 +375,9 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-workspace-call { display: flex; flex-direction: column; min-height: 0; }
 .meeting-workspace-call > .meeting-body { flex: 1; min-height: 0; }
 .meeting-workspace-call > .meeting-footer { flex: 0 0 auto; }
+.meeting-document-add { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.meeting-preview-badge { margin-inline-start: var(--space-1); padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--affordance-subtle); color: var(--text-subtle); }
+/* Eight workspace views fit one row; in narrow panes the row scrolls instead of wrapping over the stage. */
+.meeting-workspace-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.meeting-workspace-tabs > * { flex: 0 0 auto; }
+@container meeting (max-width: 52rem) { .meeting-workspace-tabs { mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent); padding-inline-end: var(--space-8); } }

@@ -524,7 +524,8 @@ test("edits a document beside the live stage, then reopens it from the meeting r
   test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition to save the meeting record");
   test.setTimeout(150000);
   await proxyWorkspaceVoice(page);
-  await page.goto(`${fixture}?realm=docs-call-${info.project.name}&speech&viewer=Alex`);
+  // Record cards only reference documents from a store that survives restarts.
+  await page.goto(`${fixture}?realm=docs-call-${info.project.name}&speech&durable-documents&viewer=Alex`);
   await linkGeneral(page);
   const view = workspace(page), tabs = view.getByRole("group", { name: "Workspace views" }), callbar = view.getByRole("group", { name: "Meeting controls" });
   await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
@@ -1037,7 +1038,7 @@ test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compa
   await page.goto(`${fixture}?realm=documents`);
   await linkGeneral(page);
   const view = workspace(page);
-  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Documents & boards", exact: true }).click();
+  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ }).click();
   const list = view.getByRole("region", { name: "Documents and boards" });
   await expect(list.getByRole("note")).toContainText("Preview: documents aren’t saved to Buzz yet.");
   await list.getByRole("button", { name: "New document", exact: true }).click();
@@ -1069,8 +1070,13 @@ test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compa
   await expect(editor.getByRole("status").filter({ hasText: "Kept — Research helper edited this while you were removing it." })).toBeVisible();
   await expect(editor.getByLabel("Paragraph 1", { exact: true })).toHaveValue("Seven of nine players braked late.");
   await expect.poll(() => page.evaluate(() => meetingTest.documents()[0].texts)).toEqual(["Seven of nine players braked late.", "Thursday, after the patch."]);
+  // Typing right before closing is flushed, not dropped.
+  await editor.getByRole("button", { name: "Add heading", exact: true }).click();
+  await editor.getByLabel("Heading 3", { exact: true }).fill("Next session");
   await editor.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => meetingTest.documents()[0].texts.at(-1))).toBe("Next session");
   await expect(list.getByRole("button", { name: /Turn 3 playtest brief/ })).toContainText("Document · revision");
+  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ })).toContainText("Preview");
 });
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);

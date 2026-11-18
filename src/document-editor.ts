@@ -19,7 +19,7 @@ export function documentSession(store: ArtifactStore, channelId: string, artifac
   const debounceMs = options.debounceMs ?? 400, now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
   let state: EditorState = { phase: "loading", saving: false, unsaved: false, conflicts: [], kept: [], error: "" };
-  let pending: Edit | undefined, timer: ReturnType<typeof setTimeout> | undefined, closed = false, saving: Promise<void> | undefined;
+  let pending: Edit | undefined, timer: ReturnType<typeof setTimeout> | undefined, closed = false, saving: Promise<void> | undefined, retries = 0;
   const emit = (next: Partial<EditorState>) => { state = { ...state, ...next }; for (const listener of [...listeners]) listener(); };
   const local = () => state.revision && pending ? applyEdit(state.revision.content, pending) : state.revision?.content;
 
@@ -70,7 +70,8 @@ export function documentSession(store: ArtifactStore, channelId: string, artifac
           if (closed) return;
           const later = pending as Edit | undefined;
           if (later) pending = { ...later, base: revision.id };
-          emit({ revision, content: later ? applyEdit(revision.content, later) : revision.content, unsaved: !!later });
+          retries = 0;
+          emit({ revision, content: later ? applyEdit(revision.content, later) : revision.content, unsaved: !!later, error: "" });
           return;
         } catch (problem) {
           if (!isStale(problem)) {
@@ -81,14 +82,20 @@ export function documentSession(store: ArtifactStore, channelId: string, artifac
             return;
           }
           const result = rebase(base.content, problem.head.content, problem.head.id, edit);
-          emit({ conflicts: [...state.conflicts, ...result.conflicts], kept: [...state.kept, ...result.kept] });
           base = problem.head; edit = result.edit;
-          if (!edit.ops.length) { emit({ revision: base, content: base.content, unsaved: !!pending }); return; }
+          // Adopt the new head now, so a later failure leaves the edit based on a revision the session knows.
+          const later = pending as Edit | undefined;
+          const view = applyEdit(base.content, edit);
+          emit({ revision: base, content: later ? applyEdit(view, { ...later, base: base.id }) : view, conflicts: [...state.conflicts, ...result.conflicts], kept: [...state.kept, ...result.kept] });
+          if (!edit.ops.length) { if (!later) emit({ unsaved: false }); return; }
         }
       }
       const later = pending as Edit | undefined;
       pending = later ? { ...edit, ops: [...edit.ops, ...later.ops] } : edit;
-      emit({ error: "Others are saving quickly. Your changes are kept; saving again shortly.", unsaved: true });
+      // Others keep saving first: back off and try again on our own.
+      const wait = Math.min(8000, 1000 * 2 ** retries++);
+      if (!closed) timer = setTimeout(() => { void save(); }, wait);
+      emit({ error: `Others are saving quickly. Your changes are kept and will save again in ${Math.round(wait / 1000)} s.`, unsaved: true });
     })();
     saving = run;
     try { await run; } finally { saving = undefined; if (!closed) emit({ saving: false }); }
@@ -109,7 +116,17 @@ export function documentSession(store: ArtifactStore, channelId: string, artifac
     snapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     edit, save, resolve, dismissKept, reload: load,
-    close() { closed = true; clearTimeout(timer); unsubscribe(); listeners.clear(); },
+    /**
+     * Flush unsaved typing, then stop. Resolves false (and stays open) when the
+     * changes could not be saved, so the caller can keep them reachable.
+     */
+    async close() {
+      clearTimeout(timer);
+      if (pending || saving) await save();
+      if (pending) return false;
+      closed = true; unsubscribe(); listeners.clear();
+      return true;
+    },
   };
 }
 export type DocumentSession = ReturnType<typeof documentSession>;

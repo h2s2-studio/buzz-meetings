@@ -19,10 +19,34 @@ type Options = {
 export function documentsUI(React: typeof ReactRuntime, options: Options) {
   const { useEffect, useMemo, useState, useSyncExternalStore, useId } = React;
   const ago = (time: number) => { const seconds = Math.max(0, Math.round((Date.now() - time) / 1000)); return seconds < 10 ? "just now" : seconds < 60 ? `${seconds} s ago` : seconds < 3600 ? `${Math.round(seconds / 60)} min ago` : new Date(time).toLocaleString(); };
+  // Open sessions outlive their editor until unsaved typing is flushed. A session whose
+  // flush failed stays here, listed as unsaved, so reopening it shows the text and Try again.
+  const sessions = new Map<string, { session: DocumentSession; refs: number }>(), registry = new Set<() => void>();
+  let unsavedList: readonly string[] = [];
+  const notify = () => { unsavedList = [...sessions].filter(([, entry]) => entry.refs === 0 && entry.session.snapshot().unsaved).map(([key]) => key); for (const listener of [...registry]) listener(); };
+  const subscribeRegistry = (listener: () => void) => { registry.add(listener); return () => { registry.delete(listener); }; };
+  function acquire(channelId: string, artifactId: string) {
+    const key = `${channelId}:${artifactId}`;
+    let entry = sessions.get(key);
+    if (!entry) { entry = { session: documentSession(options.store, channelId, artifactId, options.actor), refs: 0 }; sessions.set(key, entry); }
+    entry.refs++; notify();
+    return entry.session;
+  }
+  function release(channelId: string, artifactId: string) {
+    const key = `${channelId}:${artifactId}`, entry = sessions.get(key);
+    if (!entry) return;
+    entry.refs--;
+    void entry.session.save().finally(() => {
+      if (entry.refs > 0 || sessions.get(key) !== entry) return notify();
+      if (entry.session.snapshot().unsaved) return notify();
+      void entry.session.close(); sessions.delete(key); notify();
+    });
+  }
   const Preview = () => options.store.durable ? null : <p className="meeting-documents-preview text-caption" role="note">Preview: documents aren’t saved to Buzz yet. They last until you close Buzz.</p>;
 
   function DocumentsList({ channelId, open }: { channelId: string; open(target: OpenTarget): void }) {
     const items = useSyncExternalStore(options.store.subscribe, () => options.store.list(channelId));
+    const unsaved = useSyncExternalStore(subscribeRegistry, () => unsavedList);
     const [busy, setBusy] = useState(false), [error, setError] = useState("");
     async function create() {
       const actor = options.actor(); if (!actor || busy) return;
@@ -38,6 +62,7 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
     return <section className="meeting-documents text-body-sm" aria-label="Documents and boards">
       <header className="meeting-documents-header"><h3 className="text-body-sm">Documents & boards</h3><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="prominent" disabled={busy} onClick={() => { void create(); }}>New document</button></header>
       <Preview />
+      {items.filter(item => unsaved.includes(`${channelId}:${item.id}`)).map(item => <p key={item.id} role="alert" className="meeting-document-notice"><span>Your last change to “{item.title}” isn’t saved yet.</span><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => open({ channelId, artifactId: item.id })}>Open to try again</button></p>)}
       {!items.length && <p className="text-subtle">Ask an agent to draft something in the call, or start a document here. Everyone with access to this workspace can open and edit it.</p>}
       <ul className="meeting-document-cards">{items.map(item => <li key={item.id}><button type="button" className="meeting-document-card" onClick={() => open({ channelId, artifactId: item.id })}>
         <strong>{item.title}</strong><span className="text-caption text-subtle">{item.kind === "document" ? "Document" : "Whiteboard"} · revision {item.head.number} · {options.name(item.head.signer)} · {ago(item.head.createdAt)}</span>
@@ -68,8 +93,9 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
   }
 
   function Editor({ target, close, openCurrent }: { target: OpenTarget; close(): void; openCurrent?(): void }) {
-    const session = useMemo(() => documentSession(options.store, target.channelId, target.artifactId, options.actor), [target.channelId, target.artifactId]);
-    useEffect(() => () => session.close(), [session]);
+    const session = useMemo(() => acquire(target.channelId, target.artifactId), [target.channelId, target.artifactId]);
+    // Closing, switching documents or leaving the tab flushes what was typed.
+    useEffect(() => () => release(target.channelId, target.artifactId), [session]);
     const live = useSyncExternalStore(session.subscribe, session.snapshot);
     const [presented, setPresented] = useState<Revision | null>();
     useEffect(() => { setPresented(undefined); if (target.revisionId) void options.store.revision(target.channelId, target.artifactId, target.revisionId).then(value => setPresented(value ?? null)); }, [target.revisionId]);
@@ -92,7 +118,7 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
         {nodes.map((node, index) => <Block key={node.id} node={node} index={index} session={session} readOnly={readOnly}
           conflict={readOnly ? undefined : live.conflicts.find(item => item.nodeId === node.id && item.field === "text")}
           keptBy={readOnly || !live.kept.some(item => item.nodeId === node.id) ? undefined : options.name(node.author)} />)}
-        {!readOnly && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => session.edit([{ type: "insert", node: { id: crypto.randomUUID(), type: "paragraph", text: "", author: options.actor() ?? "", editedAt: Date.now() }, after: nodes.at(-1)?.id ?? null }], true)}>Add paragraph</button>}
+        {!readOnly && <div className="meeting-document-add">{(["heading", "paragraph"] as const).map(type => <button key={type} type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => session.edit([{ type: "insert", node: { id: crypto.randomUUID(), type, text: "", author: options.actor() ?? "", editedAt: Date.now() }, after: nodes.at(-1)?.id ?? null }], true)}>{type === "heading" ? "Add heading" : "Add paragraph"}</button>)}</div>}
       </div>}
       {!readOnly && <footer className="meeting-document-footer text-caption" role="status">
         <span className="meeting-status-dot" data-connected={!live.unsaved && !live.saving || undefined} />

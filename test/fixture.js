@@ -147,7 +147,7 @@ const { apply } = await import("../plugin.js");
 const artifactStorage = { open(definition) { if (!connection.viewer || !connection.origin) throw new Error("Artifact storage needs a plugin, identity and relay"); return host.storage.open(definition); } };
 if (query.has("cold")) connection = { ...connection, status: "connecting", origin: undefined, scope: undefined };
 // Documents use an in-memory store the tests can drive (remote edits as another person).
-const meetingsArtifactStore = memoryArtifactStore(() => connection.viewer);
+const meetingsArtifactStore = memoryArtifactStore(() => connection.viewer, { durable: query.has("durable-documents") });
 apply({ meetingsArtifactStore, react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },

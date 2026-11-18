@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 const bundle = async entry => { const built = await build({ entryPoints: [entry], bundle: true, format: "esm", platform: "node", write: false }); return import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`); };
-const [{ memoryArtifactStore, StaleRevision }, { documentSession }, { createContent, applyEdit }] = await Promise.all(["src/artifact-store.ts", "src/document-editor.ts", "src/artifacts.ts"].map(bundle));
+const [{ memoryArtifactStore, StaleRevision, recordArtifacts }, { documentSession }, { createContent, applyEdit }] = await Promise.all(["src/artifact-store.ts", "src/document-editor.ts", "src/artifacts.ts"].map(bundle));
 
 const agent = "a".repeat(64), riley = "b".repeat(64), sam = "c".repeat(64), channel = "10000000-0000-4000-8000-000000000001";
 const settle = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms));
@@ -104,5 +104,69 @@ test("an invalid change is refused without losing earlier edits", async () => {
   assert.equal(session.snapshot().content.nodes[1].text, "Good.");
   await session.save();
   assert.equal((await store.head(channel, id)).content.nodes[1].text, "Good.");
+  session.close();
+});
+
+// PR #10 review items.
+test("records never reference documents from a store that keeps nothing across restarts", async () => {
+  const { store } = await seeded();
+  assert.deepEqual(recordArtifacts(store, channel, "RM_call"), []);
+  const durable = memoryArtifactStore(() => agent, { durable: true });
+  const made = await durable.create(channel, createContent({ kind: "document", title: "Brief", createdBy: agent, occurrenceId: "RM_call" }));
+  assert.deepEqual(recordArtifacts(durable, channel, "RM_call").map(item => [item.id, item.revision, item.number]), [[made.artifactId, made.id, 1]]);
+  assert.deepEqual(recordArtifacts(durable, channel, "RM_other"), []);
+});
+
+test("closing flushes text typed within the debounce window", async () => {
+  const { store, id, causes } = await seeded();
+  const session = documentSession(store, channel, id, () => sam, { debounceMs: 10_000 });
+  await settle();
+  session.edit([{ type: "update", id: causes.id, fields: { text: "Typed just before closing." } }]);
+  assert.equal(await session.close(), true);
+  assert.equal((await store.head(channel, id)).content.nodes[1].text, "Typed just before closing.");
+  // A flush that fails keeps the session open with the text.
+  const failing = documentSession(store, channel, id, () => sam, { debounceMs: 10_000 });
+  await settle();
+  const original = store.publish; store.publish = async () => { throw new Error("Connection lost"); };
+  failing.edit([{ type: "update", id: causes.id, fields: { text: "Not saved yet." } }]);
+  assert.equal(await failing.close(), false);
+  assert.equal(failing.snapshot().content.nodes[1].text, "Not saved yet."); assert.equal(failing.snapshot().unsaved, true);
+  store.publish = original;
+  assert.equal(await failing.close(), true);
+});
+
+test("a stale save, then a network failure, then a retry gives one clean save and no duplicate conflicts", async () => {
+  const { store, id, saw, causes } = await seeded();
+  const session = documentSession(store, channel, id, () => sam, { debounceMs: 10_000 });
+  await settle();
+  session.edit([{ type: "update", id: saw.id, fields: { text: "Sam's line." } }, { type: "update", id: causes.id, fields: { text: "Thursday." } }]);
+  await remoteText(store, id, agent, causes, "Friday.");
+  const original = store.publish; let calls = 0;
+  store.publish = async (...args) => { if (++calls === 2) throw new Error("Connection lost"); return original(...args); };
+  await session.save();
+  assert.match(session.snapshot().error, /Connection lost/);
+  const head = await store.head(channel, id);
+  assert.equal(session.snapshot().revision.id, head.id, "the session adopted the head its edit was rebased onto");
+  assert.equal(session.snapshot().conflicts.length, 1);
+  await session.save();
+  const saved = await store.head(channel, id);
+  assert.equal(saved.number, head.number + 1);
+  assert.deepEqual(saved.content.nodes.map(node => node.text), ["Sam's line.", "Friday."]);
+  assert.equal(session.snapshot().conflicts.length, 1); assert.equal(session.snapshot().error, "");
+  session.close();
+});
+
+test("when others keep saving first, the session schedules its own retry", async () => {
+  const { store, id, saw, causes } = await seeded();
+  const session = documentSession(store, channel, id, () => sam, { debounceMs: 10_000 });
+  await settle();
+  session.edit([{ type: "update", id: saw.id, fields: { text: "Mine." } }]);
+  const original = store.publish; let busy = 4;
+  store.publish = async (...args) => { if (busy-- > 0) await remoteText(store, id, riley, causes, `Riley ${busy}`); return original(...args); };
+  await session.save();
+  assert.match(session.snapshot().error, /will save again in 1 s/);
+  await settle(1200);
+  assert.equal(session.snapshot().unsaved, false); assert.equal(session.snapshot().error, "");
+  assert.equal((await store.head(channel, id)).content.nodes[0].text, "Mine.");
   session.close();
 });
