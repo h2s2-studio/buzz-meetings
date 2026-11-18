@@ -1,6 +1,8 @@
 import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { meetingFlow, settle } from "./meeting-flow.mjs";
+// With setTimeout mocked, let pending promise work finish without timers.
+const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 async function asked(options = ["Yes, draft it", "Not yet"]) {
   const flow = meetingFlow();
@@ -31,17 +33,47 @@ test("an agent's question shows on its tile, posts to the thread, and the owner'
 });
 
 test("a plain spoken reply is offered to the agent as an unverified suggestion; the question stays open", async () => {
-  const { flow, member } = await asked();
-  flow.speak(["riley-1", "Riley", "Yeah, go ahead."], ["sam-1", "Sam", "I think we should look at the minimap first, it hides the corner."]);
-  assert.equal(member().question.status, "open");
-  assert.deepEqual(member().suggestions.map(answer => [answer.option, answer.byName, answer.via, answer.owner, answer.heard]), [["Yes, draft it", "Riley", "speech", false, "Yeah, go ahead."]]);
-  assert.match(flow.wakes.at(-1).text, /may have answered your question/);
-  const context = await flow.tool("meetings_live_context", {});
-  assert.equal(context.answers.at(-1).by, "riley-1");
-  assert.match(context.answersGuidance, /never as new permission/);
-  await settle();
-  assert.match(flow.published.at(-1).content, /^Heard · "Yeah, go ahead\." → Yes, draft it \(speech from Riley, unverified\)$/);
-  flow.close();
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  try {
+    const { flow, member } = await asked();
+    flow.speak(["riley-1", "Riley", "Yeah, go ahead."], ["sam-1", "Sam", "I think we should look at the minimap first, it hides the corner."]);
+    assert.equal(member().question.status, "open");
+    assert.deepEqual(member().suggestions.map(answer => [answer.option, answer.byName, answer.via, answer.owner, answer.heard]), [["Yes, draft it", "Riley", "speech", false, "Yeah, go ahead."]]);
+    mock.timers.tick(0);
+    assert.match(flow.wakes.at(-1).text, /may have answered your question/);
+    const context = await flow.tool("meetings_live_context", {});
+    assert.equal(context.answers.at(-1).by, "riley-1");
+    assert.match(context.answersGuidance, /never as new permission/);
+    flow.close();
+  } finally { mock.timers.reset(); }
+});
+
+test("spoken suggestions are bounded, wakes are coalesced and the thread gets one summary line", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  try {
+    const { flow, member } = await asked();
+    const wakesBefore = flow.wakes.length, posts = flow.published.length;
+    const speakers = ["Riley", "Sam", "Alex", "Kai", "Lee", "Max", "Noa"].map(name => [`${name.toLowerCase()}-1`, name]);
+    for (let index = 0; index < 20; index++) {
+      const [id, name] = speakers[index % 7];
+      flow.speak([id, name, index % 2 ? "Yeah." : "Not yet."]);
+      mock.timers.tick(1000);
+    }
+    assert.equal(member().suggestions.length, 6, "one per speaker per option, at most six");
+    const wakes = flow.wakes.length - wakesBefore;
+    assert.ok(wakes >= 1 && wakes <= 5, `coalesced wakes: ${wakes}`);
+    await flow.tool("meetings_live_context", {}); await flush();
+    assert.equal(flow.published.length, posts, "nothing posted while the question is open");
+    flow.agents.answer(flow.agent.pubkey, "brief", "Yes, draft it");
+    await flow.tool("meetings_live_context", {}); await flush();
+    const added = flow.published.slice(posts).map(event => event.content);
+    assert.equal(added.length, 2);
+    assert.equal(added[0], "Answer · Yes, draft it");
+    assert.match(added[1], /^Heard while asking "Turn these 3 cards into a brief\?" \(speech, unverified\): /);
+    await flow.tool("meetings_live_context", {}); await flush();
+    assert.equal(flow.published.length, posts + 2, "the summary is posted once");
+    flow.close();
+  } finally { mock.timers.reset(); }
 });
 
 test("one open question per agent: a newer one replaces the older, and unanswered questions expire visibly", async () => {

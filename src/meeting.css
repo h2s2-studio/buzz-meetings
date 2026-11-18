@@ -466,3 +466,5 @@ details[class^="meeting-"][open] > summary { margin-block-end: var(--space-2); }
 .meeting-workspace-tabs .buzz-button { color: var(--text-subtle); background: transparent; }
 .meeting-workspace-tabs .buzz-button:hover { color: var(--text-standard); }
 .meeting-workspace-tabs .buzz-button[aria-pressed="true"] { color: var(--text-standard); background: var(--affordance-selected, var(--affordance-subtle)); font-weight: var(--type-weight-medium, 500); }
+/* A finished agent's result action keeps clear of the tile edge. */
+.meeting-tiles .meeting-agent-roster .meeting-agent-status { padding-block-end: var(--space-3); row-gap: var(--space-1); }
