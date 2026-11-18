@@ -29,6 +29,16 @@ pub(super) struct WorkspaceRequest {
     /// Read who is in the call without joining it (pre-join overview).
     #[serde(default)]
     pub presence: bool,
+    /// Publish one of the requester's agents' screens: the agent's public key (hex).
+    /// The admission is screen-share only and cannot subscribe.
+    #[serde(default)]
+    pub presenter: Option<String>,
+}
+
+/// The agent a presenter identity (`<owner>-presenter-<agent>-<nonce>`) publishes for.
+pub(super) fn presenter_agent(identity: &str) -> Option<PublicKey> {
+    let rest = identity.get(64..)?.strip_prefix("-presenter-")?;
+    PublicKey::from_hex(rest.get(..64)?).ok()
 }
 
 impl WorkspaceAccess {
@@ -236,6 +246,23 @@ pub(super) async fn serve(
                     .await;
             } else if request.captions {
                 captions::serve(socket, &service, &room, Some((&request.channel, viewer))).await;
+            } else if let Some(agent) = &request.presenter {
+                // The owner is admitted above; the agent must also belong to the channel.
+                // Clients show the stream under the agent only while that owner's own
+                // participant lists the agent, so the owner vouches for it.
+                let reply = match present(&service, &request, viewer, agent, &room).await {
+                    Ok(token) => serde_json::to_string(&Reply::Admitted {
+                        url: service.livekit_url.as_str(),
+                        token,
+                        occurrence_id: service.occurrence(&room).await,
+                        room,
+                        capabilities: service.capabilities(false),
+                        invite: None,
+                    })
+                    .unwrap_or_default(),
+                    Err(error) => json!({"type":"error","error":error}).to_string(),
+                };
+                let _ = socket.send(Message::Text(reply.into())).await;
             } else {
                 let metadata =
                     json!({"picture":request.picture, "channel":request.channel}).to_string();
@@ -332,6 +359,38 @@ async fn authorize(
         )))
     );
     Ok((viewer, room))
+}
+
+async fn present(
+    service: &RoomService,
+    request: &WorkspaceRequest,
+    viewer: PublicKey,
+    agent: &str,
+    room: &str,
+) -> Result<String, &'static str> {
+    let access = service
+        .workspace_access
+        .as_ref()
+        .ok_or("Workspace voice is not configured on this meeting service.")?;
+    let agent = (agent.len() == 64)
+        .then(|| PublicKey::from_hex(agent).ok())
+        .flatten()
+        .ok_or("Invalid agent.")?;
+    timeout(
+        Duration::from_secs(8),
+        access.roster(&service.http, &request.channel, agent),
+    )
+    .await
+    .map_err(|_| "Channel access verification timed out.")?
+    .map_err(|_| "That agent is not a member of this channel.")?;
+    let identity = format!(
+        "{}-presenter-{}-{}",
+        viewer.to_hex(),
+        agent.to_hex(),
+        random_code()
+    );
+    let metadata = json!({"channel":request.channel, "presenter":agent.to_hex()}).to_string();
+    service.presenter_token(&request.name, room, &metadata, &identity)
 }
 
 fn valid_channel(value: &str) -> bool {
@@ -474,7 +533,14 @@ pub(super) async fn guard(service: Arc<RoomService>) {
                     );
                     let allowed = if valid_channel(channel) && expected == name {
                         if let Some(viewer) = viewer {
-                            access.roster(&service.http, channel, viewer).await
+                            let owner = access.roster(&service.http, channel, viewer).await;
+                            // A presenter stays only while its owner and its agent both belong.
+                            match (owner, presenter_agent(identity)) {
+                                (Ok(()), Some(agent)) => {
+                                    access.roster(&service.http, channel, agent).await
+                                }
+                                (owner, _) => owner,
+                            }
                         } else {
                             Err("Invalid participant identity.")
                         }
@@ -617,6 +683,7 @@ mod tests {
         let author = Keys::generate();
         let service_keys = Keys::generate();
         let owner = Keys::generate();
+        let agent = Keys::generate();
         let channel = "10000000-0000-4000-8000-000000000001";
         let data = Arc::new(std::sync::Mutex::new(vec![
             signed(
@@ -631,6 +698,7 @@ mod tests {
                 vec![
                     vec!["d", channel],
                     vec!["p", &owner.public_key().to_hex()],
+                    vec!["p", &agent.public_key().to_hex()],
                     vec!["p", &service_keys.public_key().to_hex()],
                 ],
                 "",
@@ -686,6 +754,64 @@ mod tests {
         let service_task = tokio::spawn(async move {
             axum::serve(socket, app).await.unwrap();
         });
+        // A presenter admission: the owner proves membership, the agent must be a member too,
+        // and the token can only publish a screen share.
+        let outsider = Keys::generate().public_key().to_hex();
+        for (presenter, admitted) in [
+            (agent.public_key().to_hex(), true),
+            (outsider, false),
+            ("not-a-key".to_owned(), false),
+        ] {
+            let (mut socket, _) = connect_async(&broker).await.unwrap();
+            let raw = json!({"type":"workspace","name":"Studio","community":origin,"channel":channel,"presenter":presenter}).to_string();
+            socket.send(Ws::Text(raw.into())).await.unwrap();
+            let challenge: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            let content = format!(
+                "Meetings admission {} {}",
+                challenge["nonce"].as_str().unwrap(),
+                challenge["digest"].as_str().unwrap()
+            );
+            let event = signed(&owner, 45010, vec![vec!["h", channel]], &content);
+            socket
+                .send(Ws::Text(json!({"event":event}).to_string().into()))
+                .await
+                .unwrap();
+            let result: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            if !admitted {
+                assert_eq!(result["type"], "error", "{presenter}");
+                continue;
+            }
+            assert_eq!(result["type"], "admitted");
+            let payload = result["token"].as_str().unwrap().split('.').nth(1).unwrap();
+            let claims: Value =
+                serde_json::from_slice(&crate::URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+            let identity = claims["sub"].as_str().unwrap();
+            assert!(identity.starts_with(&format!(
+                "{}-presenter-{}-",
+                owner.public_key().to_hex(),
+                agent.public_key().to_hex()
+            )));
+            assert_eq!(presenter_agent(identity), Some(agent.public_key()));
+            assert_eq!(
+                claims["video"]["canPublishSources"],
+                json!(["screen_share"])
+            );
+            assert_eq!(claims["video"]["canSubscribe"], false);
+            assert_eq!(claims["video"]["canPublishData"], false);
+            assert_eq!(claims["video"]["canUpdateOwnMetadata"], false);
+            let metadata: Value =
+                serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
+            assert_eq!(metadata["presenter"], agent.public_key().to_hex());
+            assert_eq!(metadata["channel"], channel);
+        }
+        assert_eq!(
+            presenter_agent(&format!("{}-abc", owner.public_key().to_hex())),
+            None
+        );
         let mut room_id = String::new();
         for name in ["Lounge", "Renamed Lounge", "Revoked Lounge"] {
             if name == "Revoked Lounge" {

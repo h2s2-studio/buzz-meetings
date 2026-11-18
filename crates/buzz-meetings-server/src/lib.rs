@@ -220,6 +220,43 @@ impl RoomService {
             })
     }
 
+    /// A screen-share-only admission for an agent's presentation: it cannot subscribe,
+    /// send data, change its metadata or publish a microphone or camera.
+    pub(crate) fn presenter_token(
+        &self,
+        name: &str,
+        room_name: &str,
+        metadata: &str,
+        identity: &str,
+    ) -> Result<String, &'static str> {
+        AccessToken::with_api_key(&self.api_key, &self.api_secret)
+            .with_identity(identity)
+            .with_name(name)
+            .with_metadata(metadata)
+            .with_ttl(Duration::from_secs(90))
+            .with_grants(VideoGrants {
+                room: room_name.to_owned(),
+                room_join: true,
+                can_subscribe: Some(false),
+                can_publish: Some(true),
+                can_publish_sources: vec!["screen_share".into()],
+                can_publish_data: Some(false),
+                can_update_own_metadata: Some(false),
+                ..Default::default()
+            })
+            .with_room_config(RoomConfiguration {
+                max_participants: MAX_PARTICIPANTS,
+                empty_timeout: EMPTY_TIMEOUT,
+                departure_timeout: DEPARTURE_TIMEOUT,
+                ..Default::default()
+            })
+            .to_jwt()
+            .map_err(|_| {
+                tracing::error!("could not sign presenter admission");
+                "Could not issue media admission."
+            })
+    }
+
     /// Open (or find) the media room and return its SID, the call occurrence.
     /// CreateRoom is idempotent: an existing room keeps its SID. Admission does
     /// not depend on it; clients confirm the SID from the room they joined.
@@ -623,7 +660,7 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
             let workspace = rooms.workspace_access.as_ref();
             // Clients poll pre-join presence only when this is advertised: an older broker would
             // treat a presence request as an admission and mint a join token.
-            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin()), "presence":true});
+            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin()), "presence":true, "presenter":true});
             let _ = socket.send(Message::Text(value.to_string().into())).await;
             return;
         }
