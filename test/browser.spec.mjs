@@ -18,6 +18,12 @@ const stage = page => page.getByRole("region", { name: "Meeting", exact: true })
 const controls = page => stage(page).getByRole("group", { name: "Meeting controls" });
 const join = page => sidebar(page).getByRole("button", { name: "Join General Voice", exact: true });
 const video = page => page.getByLabel("Shared screen", { exact: true });
+// The side panel is a tab set (Chat / Transcript / Agent); reopen it first if it was closed.
+async function rail(page, name) {
+  const open = page.getByRole("button", { name: "Open side panel", exact: true });
+  if (await open.isVisible()) await open.click();
+  await page.getByRole("tab", { name, exact: true }).click();
+}
 async function startShare(page) {
   const drawer = page.getByRole("dialog", { name: "Screen sharing", exact: true });
   if (!await drawer.isVisible()) await controls(page).getByRole("button", { name: "Share screen", exact: true }).click();
@@ -83,7 +89,7 @@ test("top-aligns rooms below host navigation and persists create, rename, and re
   await page.getByRole("button", { name: "Remove Design Room", exact: true }).click();
   await page.getByRole("button", { name: "Remove channel shortcut", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
-  await expect(page.getByText("Create a voice channel to start a conversation.")).toBeVisible();
+  await expect(page.getByText("Start a meeting to talk, share a screen, or work through something together.")).toBeVisible();
   await page.reload();
   await expect(join(page)).toHaveCount(0);
 });
@@ -103,7 +109,7 @@ test("keeps the native room conversation available after failed voice and isolat
   await sidebar(page).getByRole("button", { name: "Join Design", exact: true }).click();
   await expect(conversation).toHaveAttribute("data-channel", design);
   await expect(conversation).not.toContainText("Notes for General Voice");
-  await page.getByRole("button", { name: "Hide room chat" }).click();
+  await page.getByRole("button", { name: "Close side panel", exact: true }).click();
   await expect(conversation).toHaveCount(0);
 });
 test("cancels a pending microphone prompt without leaking a late capture", async ({ page }) => {
@@ -532,14 +538,14 @@ test("keeps icon controls reachable and sharing choices explicit across pane siz
   expect(box.y + box.height).toBeLessThanOrEqual(anchor.y);
   await drawer.getByLabel("Quality for next source").selectOption("sharp");
   await page.keyboard.press("Escape"); await expect(drawer).not.toBeVisible(); await expect(trigger).toBeFocused();
-  await page.getByRole("button", { name: "Hide room chat", exact: true }).click();
+  await page.getByRole("button", { name: "Close side panel", exact: true }).click();
   await page.getByRole("button", { name: "Messages", exact: true }).click();
   const toolbar = page.getByRole("toolbar", { name: "Buzz toolbar" });
   await toolbar.getByRole("button", { name: "Share screen", exact: true }).click();
   await expect(drawer.getByLabel("Quality for next source")).toHaveValue("sharp");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Show room chat", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open side panel", exact: true })).toBeVisible();
   for (const [width, root] of [[960,16], [530,16], [390,16], [1280,32]]) {
     await page.setViewportSize({ width, height: 800 });
     await page.evaluate(size => { document.documentElement.style.fontSize = `${size}px`; }, root);
@@ -550,7 +556,7 @@ test("keeps icon controls reachable and sharing choices explicit across pane siz
 
 test("assigns an agent task through native chat, reviews membership separately and reports real activity", async ({ page }, info) => {
   await page.goto(`${fixture}?realm=agent-flow-${info.project.name}&agents`);
-  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  await rail(page, "Agent");
   const agents = page.getByRole("region", { name: "Meeting agents", exact: true });
   await page.evaluate(()=>meetingTest.setAgentRunning(false));
   await expect(agents.getByRole("button",{name:"Add Research helper to call",exact:true})).toHaveCount(0);
@@ -575,9 +581,9 @@ test("assigns an agent task through native chat, reviews membership separately a
   await expect(agents).toContainText("Working");
   await agents.getByRole("button", { name: "Stop task", exact: true }).click();
   await expect(agents).toContainText("Stopped");
-  await page.getByRole("button", { name: "Show room chat", exact: true }).click();
+  await rail(page, "Chat");
   await expect(page.getByRole("region", { name: "Native conversation" })).toContainText("Find the open decisions");
-  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  await rail(page, "Agent");
   await agents.getByText("Send a written task", { exact: true }).click();
   await page.evaluate(async input => meetingTest.workspaceControl(input), { grant: { id: general, viewer: identities.Alex, role: "guest" } });
   await expect(agents.getByRole("button", { name: "Send task", exact: true })).toBeDisabled();
@@ -595,8 +601,8 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   await join(page).click(); await join(other).click();
   await expect(controls(page).getByRole("status")).toHaveText("Voice connected");
   await expect(controls(other).getByRole("status")).toHaveText("Voice connected");
-  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
-  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  await rail(page, "Transcript");
+  await rail(page, "Agent");
   const panel = page.getByRole("region", { name: "Meeting agents", exact: true });
   await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks", { timeout: 15000 });
@@ -633,13 +639,13 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   await expect(stage(other).getByRole("status").filter({ hasText: "agent listening" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
   await expect(stage(other).getByRole("status").filter({ hasText: "Shared transcription active" })).toBeVisible();
-  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
+  await rail(page, "Transcript");
   const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   await expect(transcript.getByRole("status")).toHaveText("Transcribing");
   await expect(transcript.getByRole("region", { name: "Transcript entries" })).toContainText(/research|notes/i);
   await transcript.getByRole("button", { name: "Pause transcription", exact: true }).click();
   await expect(stage(other).getByRole("status").filter({ hasText: "Shared transcription active" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  await rail(page, "Agent");
   // Panel remounts intentionally: choose the agent for a fresh assignment.
   await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks");
@@ -657,7 +663,7 @@ test("completes a task after the agent stops listening and opens its result from
   await page.goto(`${fixture}?realm=results-${info.project.name}&agents&speech&viewer=Alex`);
   await join(page).click();
   await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
-  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  await rail(page, "Agent");
   const panel = page.getByRole("region", { name: "Meeting agents", exact: true });
   await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks", { timeout: 15000 });
@@ -679,11 +685,11 @@ test("completes a task after the agent stops listening and opens its result from
   const result = (await page.evaluate(() => meetingTest.workspaceState())).messages[general].at(-1);
   expect(result.text).toContain("Brief posted");
   await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
-  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
+  await rail(page, "Transcript");
   const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   await transcript.getByRole("button", { name: "Save meeting record", exact: true }).click();
   await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
-  await page.getByRole("button", { name: "Show room chat", exact: true }).click();
+  await rail(page, "Chat");
   await linkGeneral(page);
   await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
   const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
@@ -711,7 +717,7 @@ test("transcribes a room without an agent or linked channel and preserves text a
     await sidebar(client).getByRole("button", { name: `Join ${roomName}`, exact: true }).click();
     await expect(controls(client).getByRole("status")).toHaveText("Voice connected");
   }
-  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
+  await rail(page, "Transcript");
   const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   const entries = panel.getByRole("region", { name: "Transcript entries", exact: true });
@@ -722,7 +728,7 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await expect(stage(page).getByRole("button",{name:/^Show Alex · \S{6,}( \(you\))? on stage$/})).toHaveCount(2);
   await expect(entries).toContainText(/research|notes/i);
   await expect(entries).toContainText(/design|Friday/i);
-  await other.getByRole("button",{name:"Show transcript",exact:true}).click();
+  await rail(other, "Transcript");
   await expect.poll(() => metrics[0].subscribers).toBe(2);
   await expect.poll(() => metrics[1].subscribers).toBe(2);
   await expect.poll(() => timelines[1].length).toBeGreaterThan(0);
@@ -737,8 +743,8 @@ test("transcribes a room without an agent or linked channel and preserves text a
     expect(box.y + box.height).toBeLessThan(size.height);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
-  await panel.getByRole("button", { name: "Close transcript", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Show transcript", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Close side panel", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Open side panel", exact: true })).toBeFocused();
   await page.keyboard.press("Enter");
   expect(await entries.locator("time").first().getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   expect(await page.evaluate(() => meetingTest.taskRequests())).toEqual([]);
@@ -834,8 +840,8 @@ test("remembers join-muted audio settings and preserves an unsent agent request"
   await agents.getByText("Send a written task",{exact:true}).click();
   await agents.getByLabel("Agent",{exact:true}).selectOption("b".repeat(64));
   await agents.getByLabel("Request",{exact:true}).fill("Keep this draft while I check the transcript.");
-  await page.getByRole("button",{name:"Show transcript",exact:true}).click();
-  await page.getByRole("button",{name:"Meeting agents",exact:true}).click();
+  await rail(page, "Transcript");
+  await rail(page,"Agent");
   await agents.getByText("Send a written task",{exact:true}).click();
   await expect(agents.getByLabel("Request",{exact:true})).toHaveValue("Keep this draft while I check the transcript.");
   await controls(page).getByRole("button",{name:"Leave room",exact:true}).click();
@@ -860,7 +866,7 @@ test("adds two agents directly as call members with one transcription connection
   await agents.getByRole("button",{name:"Remove Research helper from call",exact:true}).click();
   await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
   await expect(agents.getByRole("button",{name:"Remove New helper from call and stop transcription",exact:true})).toBeVisible();
-  await page.getByRole("button",{name:"Show transcript",exact:true}).click();
+  await rail(page, "Transcript");
   const transcript=page.getByRole("complementary",{name:"Meeting transcript",exact:true});
   await expect(transcript.getByRole("region",{name:"Transcript entries"})).toContainText(/research|notes/i,{timeout:45000});
   await transcript.getByRole("button",{name:"Save meeting record",exact:true}).click();
