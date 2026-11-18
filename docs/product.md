@@ -40,3 +40,40 @@ journaled intent, readback and exact-revision references.
 This architecture uses the plugin and adjacent Meetings services. It requires no
 Buzz desktop fork. A physical-device session and a real native agent completing
 a spoken task remain separate release evidence from browser contract fixtures.
+
+## Identifiers
+
+Tasks, transcripts, records and presentations are keyed by workspace and call
+occurrence, never by a room name or a per-join value.
+
+| ID | Definition | Notes |
+|---|---|---|
+| `workspaceId` | Community origin plus channel UUID. The media room name is `workspace-` + base64url(sha256(origin + "\n" + channel)). | A channel rename keeps the same workspace and room. Quick rooms use `meeting-` + the same digest of the normalized room name. |
+| `occurrenceId` | The media room's LiveKit SID (`RM_…`): one per call, shared by every attendee. | The broker opens the room with `CreateRoom` at admission and returns the SID. The client trusts the SID of the room it actually joined and re-checks it after a full reconnect. The SID survives a rejoin. An empty room keeps it for the 20 s departure timeout, and a page closed mid-call keeps it until the media server times that participant out. After that the next join starts a new occurrence. |
+| `joinId` | A local UUID per join. | UI lifecycle only. Never persisted or used as a key. |
+| `agentId` | The agent's pubkey (hex). | An agent session takes the call's occurrence when it becomes known. If the occurrence changes to a different value under the same join, the session ends with a visible reason. |
+| `artifactId` | The `d` UUID of a channel-scoped (`h`) kind-45010 artifact. | Meeting records today; documents and boards next. |
+| `revisionId` | The accepted event ID of an artifact revision. | Records reference parts by exact revision. |
+
+## Meeting records
+
+A saved record is a kind-45010 artifact of type `studio.h2s2.meetings.record`.
+Its transcript is split into `studio.h2s2.meetings.record.part` artifacts of up
+to about 40 KB each. The record manifest is saved last and references each
+part by exact revision.
+
+- **Version 2 (current).** Each part holds `{ version: 2, channelId, entries }`.
+  An entry is `{ id, speakerId, speakerName, startedAt, endedAt, text }`. The
+  manifest adds `callId` (the occurrence), task results with author and
+  message ID, and `covers` (`lastEntryId`, `count`, and for a shared stream
+  `streamId` and the highest sequence `through`). A transcript counts as saved
+  only when a record in its channel and occurrence covers its last entry.
+- **Version 1.** Each part holds preformatted text. It is still read and shown
+  as stored. Same-name speakers cannot be told apart in these records.
+
+Readers label speakers across the whole record with the same stable suffix the
+live view uses. Copy and Download use the same format.
+
+An unsaved transcript is held in memory until it is saved and closed, or
+discarded. That includes earlier joins kept after a rejoin. It does not survive
+an app restart.
