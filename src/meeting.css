@@ -402,3 +402,70 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-tiles .meeting-agent-roster:has(.meeting-agent-question) { justify-content: flex-start; gap: var(--space-2); padding: var(--space-3); overflow: auto; }
 .meeting-tiles .meeting-agent-roster:has(.meeting-agent-question) > .meeting-person-pick { flex: 0 0 auto; flex-direction: row; height: auto; }
 .meeting-tiles .meeting-agent-roster:has(.meeting-agent-question) .meeting-avatar[data-large] { width: 1.75rem; height: 1.75rem; }
+
+/* Quiet surfaces: one visual language for the whole plugin.
+   - No tinted fills or colored outlines. An agent is identified by its icon tint only.
+   - No boxes inside boxes: content sits directly on its surface.
+   - One control style for every dropdown and every expandable row. */
+.meeting-page, .meeting-workspace-page { --meeting-agent-surface: var(--surface-message); --meeting-agent-text: var(--text-standard); }
+.meeting-film-tile[data-kind="agent"] .meeting-film-glyph { color: var(--meeting-agent-accent); }
+.meeting-agent-status { color: var(--text-subtle); }
+.meeting-agent-status-state { color: var(--text-standard); }
+
+/* "Needs input" is one small mark, not a frame. */
+.meeting-agent-roster[data-state="needs-input"], .meeting-film-tile[data-state="needs-input"] { border-color: transparent; }
+.meeting-tiles .meeting-agent-roster[data-state="needs-input"]::after, .meeting-film-tile[data-state="needs-input"]::after { content: ""; position: absolute; inset-block-start: var(--space-3); inset-inline-end: var(--space-3); width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--meeting-agent-accent); }
+.meeting-tiles .meeting-agent-roster { position: relative; }
+
+/* The question sits on the tile itself: text, compact buttons, one quiet line of help. */
+.meeting-agent-question { padding: 0; border: 0; border-radius: 0; background: transparent; gap: var(--space-3); }
+.meeting-agent-question-text { font-weight: var(--type-weight-regular, 400); color: var(--text-standard); }
+.meeting-agent-question-meta { color: var(--text-metadata); }
+.meeting-agent-question-option { background: var(--affordance-subtle); color: var(--text-subtle); }
+/* A draining line replaces a ticking countdown; --remaining is 0–1. */
+.meeting-agent-question-timer { display: block; height: 2px; border-radius: 1px; background: var(--border-standard); overflow: hidden; }
+.meeting-agent-question-timer::before { content: ""; display: block; height: 100%; width: calc(var(--remaining, 1) * 100%); background: var(--text-metadata); transition: width 1s linear; }
+@media (prefers-reduced-motion: reduce) { .meeting-agent-question-timer::before { transition: none; } }
+/* Above a filmstrip tile the question floats, so it needs its own surface there. */
+.meeting-film-tile > .meeting-agent-question[data-compact] { padding: var(--space-3); border-radius: var(--radius-container); background: var(--surface-base); border: 1px solid var(--border-standard); }
+.meeting-tiles .meeting-agent-roster:has(.meeting-agent-question) { padding: var(--space-4); gap: var(--space-3); }
+
+/* Dropdowns: Buzz's input, one chevron, never the platform's own arrow. Only the plugin's own
+   selects carry .meeting-select, so native conversation and Canvas controls are untouched. */
+select.meeting-select { appearance: none; -webkit-appearance: none; min-height: var(--size-control, 2.25rem); padding-inline: var(--space-3) calc(var(--space-3) + 1.25rem); border-radius: var(--radius-control); cursor: pointer; text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-subtle) 50%), linear-gradient(135deg, var(--text-subtle) 50%, transparent 50%);
+  background-position: calc(100% - var(--space-3) - 0.3rem) 50%, calc(100% - var(--space-3)) 50%; background-size: 0.3rem 0.3rem; background-repeat: no-repeat; }
+[dir="rtl"] select.meeting-select { background-position: calc(var(--space-3) + 0.3rem) 50%, var(--space-3) 50%; }
+select.meeting-select:disabled { cursor: default; opacity: 0.6; }
+select.meeting-select[data-size="sm"] { min-height: var(--size-control-sm, 1.75rem); }
+
+/* Expandable rows: a full-width row with a chevron that turns, the same everywhere. */
+details[class^="meeting-"] > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--size-row, 2.25rem); list-style: none; cursor: pointer; color: var(--text-subtle); border-radius: var(--radius-control); }
+details[class^="meeting-"] > summary::-webkit-details-marker { display: none; }
+details[class^="meeting-"] > summary::after { content: ""; margin-inline-start: auto; width: 0.4rem; height: 0.4rem; border-inline-end: 1.5px solid currentColor; border-block-end: 1.5px solid currentColor; transform: rotate(45deg); transition: transform 120ms ease; }
+details[class^="meeting-"][open] > summary::after { transform: rotate(-135deg); }
+details[class^="meeting-"] > summary:hover { color: var(--text-standard); }
+details[class^="meeting-"] > summary:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+details[class^="meeting-"][open] > summary { margin-block-end: var(--space-2); }
+@media (prefers-reduced-motion: reduce) { details[class^="meeting-"] > summary::after { transition: none; } }
+.meeting-agents details[class^="meeting-"] { border-block-start: 1px solid var(--border-standard); padding-block: var(--space-1); }
+
+/* Agent selector: icon, name, one line of status, a quiet action. */
+.meeting-agent-choice, .meeting-agent-member { border-bottom: 0; padding-block: var(--space-2); }
+.meeting-agent-choice + .meeting-agent-choice, .meeting-agent-member + .meeting-agent-member { border-top: 1px solid var(--border-standard); }
+.meeting-agent-choice strong, .meeting-agent-member strong { font-weight: var(--type-weight-medium, 500); }
+.meeting-agent-member .meeting-agent-symbol { color: var(--meeting-agent-accent); }
+
+/* Workspace navigation: three places (plus Call), then one small switch inside Library. */
+.meeting-workspace-tabs { gap: var(--space-1); }
+.meeting-library-switch { display: flex; gap: var(--space-4); padding: 0 var(--space-panel-inset); border-bottom: 1px solid var(--border-standard); overflow-x: auto; scrollbar-width: none; }
+.meeting-library-option { flex: 0 0 auto; padding: var(--space-2) 0; border: 0; border-block-end: 2px solid transparent; margin-block-end: -1px; background: none; color: var(--text-subtle); font: inherit; font-size: var(--text-body-sm, 0.875rem); cursor: pointer; }
+.meeting-library-option:hover { color: var(--text-standard); }
+.meeting-library-option[aria-pressed="true"] { color: var(--text-standard); border-block-end-color: var(--text-standard); }
+.meeting-library-option:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-control); }
+.meeting-library-option .meeting-preview-badge { margin-inline-start: var(--space-2); color: var(--text-metadata); }
+.meeting-workspace-tabs .buzz-button { color: var(--text-subtle); background: transparent; }
+.meeting-workspace-tabs .buzz-button:hover { color: var(--text-standard); }
+.meeting-workspace-tabs .buzz-button[aria-pressed="true"] { color: var(--text-standard); background: var(--affordance-selected, var(--affordance-subtle)); font-weight: var(--type-weight-medium, 500); }
+/* A finished agent's result action keeps clear of the tile edge. */
+.meeting-tiles .meeting-agent-roster .meeting-agent-status { padding-block-end: var(--space-3); row-gap: var(--space-1); }
