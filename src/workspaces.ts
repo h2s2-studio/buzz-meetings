@@ -1,3 +1,4 @@
+import type { AgentSession } from "./agents-ui";
 // Structural API-v1 contracts. Buzz owns verification, channel commands and sync.
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Event = { id: string; pubkey: string; sig: string; kind: number; created_at: number; tags: string[][]; content: string };
@@ -21,7 +22,7 @@ export type WorkspaceSession = {
   channelCreation?: { available: boolean; create(input: { name: string; visibility: "open" | "private"; description?: string }): Promise<string> };
   channelDetails?: { available: boolean; load(id: string, signal?: AbortSignal): Promise<Details>; save(base: Details, draft: Omit<Details, "channelId" | "version" | "canEdit">, signal?: AbortSignal, active?: () => boolean): Promise<void>; check(id: string, signal?: AbortSignal): Promise<void>; snapshot(id: string): { status: string } | undefined };
 };
-export type WorkspaceConnection = { status?: string; viewer?: string; origin?: string; scope?: string; session: WorkspaceSession };
+export type WorkspaceConnection = { status?: string; viewer?: string; origin?: string; scope?: string; session: WorkspaceSession & AgentSession };
 export const workspaceType = "studio.h2s2.meetings.workspace";
 export const uuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) && value !== "00000000-0000-0000-0000-000000000000";
 export const tag = (event: Event, key: string) => {

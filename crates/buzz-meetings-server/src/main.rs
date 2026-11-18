@@ -24,8 +24,15 @@ async fn main() -> Result<()> {
         config.livekit_api_secret,
         &config.room_creation_key,
     );
+    if let Some(access) = buzz_meetings_server::workspaces::WorkspaceAccess::from_env()? {
+        tracing::info!(public_key = %access.public_key(), "Meetings service identity");
+        rooms = rooms.with_workspace_access(access);
+    }
     if let Some(key) = &config.room_proxy_key {
         rooms = rooms.with_proxy_key(key);
+    }
+    if let Some(url) = config.transcription_url {
+        rooms = rooms.with_transcriber(url);
     }
     tracing::info!(addr = %listener.local_addr()?, "Buzz Meetings room service listening");
     axum::serve(listener, router(rooms))

@@ -11,7 +11,13 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?Set a LiveKit API key}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?Set a LiveKit API secret}
       MEETING_ACCESS_KEY: ${MEETING_ACCESS_KEY:?Set a random room creation key}
+      MEETING_TRANSCRIBER_URL: ${MEETING_TRANSCRIBER_URL:-}
       MEETING_PROXY_KEY: ${MEETING_PROXY_KEY:-}
+      MEETING_RELAY_URL: ${MEETING_RELAY_URL:-}
+      MEETING_RELAY_PUBLIC_KEY: ${MEETING_RELAY_PUBLIC_KEY:-}
+      MEETING_IDENTITY_FILE: ${MEETING_IDENTITY_FILE:-}
+    volumes:
+      - meeting-identity:/identity
   livekit:
     image: livekit/livekit-server:v1.13.11
     network_mode: host
@@ -27,3 +33,30 @@ services:
       - ${LIVEKIT_NODE_IP:?Set a media IP reachable by clients}
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?Set a LiveKit API key}: ${LIVEKIT_API_SECRET:?Set a LiveKit API secret}"
+
+  transcriber:
+    profiles: [speech]
+    build:
+      context: ..
+      dockerfile: services/transcriber/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    cpus: 2
+    mem_limit: 1g
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base.en}
+      WHISPER_MODEL_DIR: /models
+      WHISPER_THREADS: 2
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: 1
+    volumes:
+      - speech-models:/models
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      start_period: 180s
+      retries: 5
+
+volumes:
+  meeting-identity:
+  speech-models:

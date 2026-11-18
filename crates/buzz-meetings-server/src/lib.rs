@@ -1,3 +1,5 @@
+mod captions;
+pub mod workspaces;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -28,11 +30,17 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_INVITES: usize = 128;
 const MAX_HANDSHAKES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 2048;
+const MAX_AUDIO_MESSAGE_BYTES: usize = 440_000;
 const PROXY_KEY_HEADER: &str = "x-buzz-streams-proxy-key";
+const MAX_PARTICIPANTS: u32 = 13;
+const EMPTY_TIMEOUT: u32 = 120;
+const DEPARTURE_TIMEOUT: u32 = 20;
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Request {
+    Workspace(workspaces::WorkspaceRequest),
+    Service,
     Create {
         name: String,
         key: Option<String>,
@@ -40,6 +48,26 @@ enum Request {
     Join {
         name: String,
         code: String,
+    },
+    Captions {
+        name: String,
+        community: String,
+        room: String,
+        picture: Option<String>,
+        key: Option<String>,
+    },
+    /// Pre-join presence for a name-based meeting, under the same access rules as joining.
+    Presence {
+        community: String,
+        room: String,
+        key: Option<String>,
+    },
+    Listen {
+        name: String,
+        community: String,
+        room: String,
+        picture: Option<String>,
+        key: Option<String>,
     },
     Meeting {
         name: String,
@@ -56,12 +84,26 @@ enum Reply<'a> {
     Admitted {
         url: &'a str,
         token: String,
+        room: String,
+        // The media server's room SID: one per call occurrence, shared by every
+        // attendee, replaced once the room empties past its departure timeout.
+        #[serde(rename = "occurrenceId", skip_serializing_if = "Option::is_none")]
+        occurrence_id: Option<String>,
+        capabilities: Capabilities,
         #[serde(skip_serializing_if = "Option::is_none")]
         invite: Option<Invite>,
     },
     Error {
         error: &'static str,
     },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Capabilities {
+    screen_audio: bool,
+    transcription: bool,
+    shared_transcription: bool,
 }
 
 #[derive(Serialize)]
@@ -84,6 +126,10 @@ pub struct RoomService {
     proxy_key_digest: Option<[u8; 32]>,
     invitations: Mutex<HashMap<String, Room>>,
     handshakes: Arc<Semaphore>,
+    transcription_url: Option<Url>,
+    transcription_jobs: Semaphore,
+    http: reqwest::Client,
+    workspace_access: Option<Arc<workspaces::WorkspaceAccess>>,
 }
 
 impl RoomService {
@@ -96,12 +142,122 @@ impl RoomService {
             proxy_key_digest: None,
             invitations: Mutex::default(),
             handshakes: Arc::new(Semaphore::new(MAX_HANDSHAKES)),
+            transcription_url: None,
+            transcription_jobs: Semaphore::new(4),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .expect("HTTP client"),
+            workspace_access: None,
         }
+    }
+
+    pub fn with_workspace_access(mut self, access: workspaces::WorkspaceAccess) -> Self {
+        self.workspace_access = Some(Arc::new(access));
+        self
+    }
+
+    fn capabilities(&self, meeting: bool) -> Capabilities {
+        Capabilities {
+            screen_audio: meeting,
+            transcription: meeting && self.transcription_url.is_some(),
+            shared_transcription: meeting && self.transcription_url.is_some(),
+        }
+    }
+
+    pub fn with_transcriber(mut self, url: Url) -> Self {
+        self.transcription_url = Some(url);
+        self
     }
 
     pub fn with_proxy_key(mut self, key: &str) -> Self {
         self.proxy_key_digest = Some(Sha256::digest(key.as_bytes()).into());
         self
+    }
+
+    fn media_token(
+        &self,
+        name: &str,
+        room_name: &str,
+        metadata: &str,
+        meeting: bool,
+        identity: &str,
+    ) -> Result<String, &'static str> {
+        AccessToken::with_api_key(&self.api_key, &self.api_secret)
+            .with_identity(identity)
+            .with_name(name)
+            .with_metadata(metadata)
+            .with_ttl(Duration::from_secs(90))
+            .with_grants(VideoGrants {
+                room: room_name.to_owned(),
+                room_join: true,
+                can_subscribe: Some(true),
+                can_publish: Some(true),
+                can_publish_sources: if meeting {
+                    vec![
+                        "microphone".into(),
+                        "camera".into(),
+                        "screen_share".into(),
+                        "screen_share_audio".into(),
+                    ]
+                } else {
+                    vec!["screen_share".into()]
+                },
+                can_publish_data: Some(false),
+                can_update_own_metadata: Some(meeting),
+                ..Default::default()
+            })
+            .with_room_config(RoomConfiguration {
+                max_participants: MAX_PARTICIPANTS,
+                empty_timeout: EMPTY_TIMEOUT,
+                departure_timeout: DEPARTURE_TIMEOUT,
+                ..Default::default()
+            })
+            .to_jwt()
+            .map_err(|_| {
+                tracing::error!("could not sign media admission");
+                "Could not issue media admission."
+            })
+    }
+
+    /// Open (or find) the media room and return its SID, the call occurrence.
+    /// CreateRoom is idempotent: an existing room keeps its SID. Admission does
+    /// not depend on it; clients confirm the SID from the room they joined.
+    pub(crate) async fn occurrence(&self, room: &str) -> Option<String> {
+        let jwt = AccessToken::with_api_key(&self.api_key, &self.api_secret)
+            .with_ttl(Duration::from_secs(60))
+            .with_grants(VideoGrants {
+                room: room.to_owned(),
+                room_create: true,
+                ..Default::default()
+            })
+            .to_jwt()
+            .ok()?;
+        let endpoint = workspaces::media_api(&self.livekit_url, "CreateRoom")?;
+        let value: serde_json::Value = self
+            .http
+            .post(endpoint)
+            .bearer_auth(jwt)
+            .json(&serde_json::json!({
+                "name": room,
+                "empty_timeout": EMPTY_TIMEOUT,
+                "departure_timeout": DEPARTURE_TIMEOUT,
+                "max_participants": MAX_PARTICIPANTS,
+            }))
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        value
+            .get("sid")
+            .and_then(serde_json::Value::as_str)
+            .filter(|sid| valid_occurrence(sid))
+            .map(str::to_owned)
     }
 
     fn trusted_proxy(&self, headers: &HeaderMap) -> bool {
@@ -124,15 +280,38 @@ impl RoomService {
         now: u64,
         trusted_proxy: bool,
     ) -> Result<Reply<'_>, &'static str> {
+        if matches!(&request, Request::Workspace(_) | Request::Service) {
+            return Err("Workspace admission requires a signed challenge.");
+        }
         let mut invitations = self
             .invitations
             .lock()
             .map_err(|_| "Room service unavailable.")?;
         invitations.retain(|_, room| room.expires_at > now);
-        let meeting = matches!(&request, Request::Meeting { .. });
+        let meeting = matches!(
+            &request,
+            Request::Meeting { .. } | Request::Listen { .. } | Request::Captions { .. }
+        );
         let mut metadata = None;
         let (name, room_name, invite) = match request {
+            Request::Workspace(_) | Request::Service | Request::Presence { .. } => {
+                return Err("Invalid room request.")
+            }
             Request::Meeting {
+                name,
+                community,
+                room,
+                picture,
+                key,
+            }
+            | Request::Captions {
+                name,
+                community,
+                room,
+                picture,
+                key,
+            }
+            | Request::Listen {
                 name,
                 community,
                 room,
@@ -210,41 +389,18 @@ impl RoomService {
         if name.is_empty() || name.chars().count() > 48 || name.chars().any(char::is_control) {
             return Err("Enter a display name of 1–48 characters.");
         }
-        let token = AccessToken::with_api_key(&self.api_key, &self.api_secret)
-            .with_identity(&random_code())
-            .with_name(name)
-            .with_metadata(&metadata.unwrap_or_default())
-            .with_ttl(Duration::from_secs(90))
-            .with_grants(VideoGrants {
-                room: room_name.clone(),
-                room_join: true,
-                can_subscribe: Some(true),
-                can_publish: Some(true),
-                can_publish_sources: if meeting {
-                    vec!["microphone".into(), "camera".into(), "screen_share".into()]
-                } else {
-                    vec!["screen_share".into()]
-                },
-                can_publish_data: Some(false),
-                can_update_own_metadata: Some(false),
-                ..Default::default()
-            })
-            .with_room_config(RoomConfiguration {
-                max_participants: 12,
-                empty_timeout: 120,
-                departure_timeout: 20,
-                ..Default::default()
-            })
-            .to_jwt()
-            .map_err(|_| {
-                tracing::error!("could not sign media admission");
-                "Could not issue media admission."
-            })?;
+        let token = self.media_token(
+            name,
+            &room_name,
+            &metadata.unwrap_or_default(),
+            meeting,
+            &random_code(),
+        )?;
         if let Some(invite) = &invite {
             invitations.insert(
                 invite.code.clone(),
                 Room {
-                    name: room_name,
+                    name: room_name.clone(),
                     expires_at: invite.expires_at,
                 },
             );
@@ -252,9 +408,143 @@ impl RoomService {
         Ok(Reply::Admitted {
             url: self.livekit_url.as_str(),
             token,
+            room: room_name,
+            occurrence_id: None,
+            capabilities: Capabilities {
+                screen_audio: meeting,
+                transcription: meeting && self.transcription_url.is_some(),
+                shared_transcription: meeting && self.transcription_url.is_some(),
+            },
             invite,
         })
     }
+}
+
+/// Who is in a media room, read with a room-admin token and never joining it.
+/// An absent room is an empty call, not an error.
+pub(crate) async fn presence(service: &RoomService, room: &str) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let checked_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let token = |list: bool| {
+        AccessToken::with_api_key(&service.api_key, &service.api_secret)
+            .with_ttl(Duration::from_secs(60))
+            .with_grants(VideoGrants {
+                room: if list { String::new() } else { room.to_owned() },
+                room_list: list,
+                room_admin: !list,
+                ..Default::default()
+            })
+            .to_jwt()
+            .ok()
+    };
+    let call = |action: &'static str, list: bool, body: Value| async move {
+        let endpoint = workspaces::media_api(&service.livekit_url, action)?;
+        service
+            .http
+            .post(endpoint)
+            .bearer_auth(token(list)?)
+            .json(&body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<Value>()
+            .await
+            .ok()
+    };
+    let Some(rooms) = call("ListRooms", true, json!({"names":[room]})).await else {
+        return json!({"type":"error","error":"Meeting presence is unavailable right now."});
+    };
+    let started = rooms
+        .get("rooms")
+        .and_then(Value::as_array)
+        .and_then(|rooms| rooms.first())
+        .and_then(|room| {
+            room.get("creation_time")
+                .or_else(|| room.get("creationTime"))
+        })
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()));
+    let mut people = Vec::new();
+    if started.is_some() {
+        let listed = call("ListParticipants", false, json!({"room":room})).await;
+        for person in listed
+            .as_ref()
+            .and_then(|value| value.get("participants"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let identity = person.get("identity").and_then(Value::as_str).unwrap_or("");
+            if identity.starts_with("transcription-") {
+                continue;
+            }
+            let metadata: Value =
+                serde_json::from_str(person.get("metadata").and_then(Value::as_str).unwrap_or(""))
+                    .unwrap_or(Value::Null);
+            let sharing = person
+                .get("tracks")
+                .and_then(Value::as_array)
+                .is_some_and(|tracks| {
+                    tracks.iter().any(|track| {
+                        matches!(track.get("source"), Some(source) if source == "SCREEN_SHARE" || source == 3)
+                    })
+                });
+            let agents: Vec<Value> = metadata
+                .get("liveAgents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(4)
+                .filter_map(|agent| {
+                    let name = agent
+                        .get("name")?
+                        .as_str()?
+                        .chars()
+                        .take(64)
+                        .collect::<String>();
+                    let mode = agent
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .filter(|mode| ["act", "assist"].contains(mode));
+                    Some(json!({"name":name, "mode":mode}))
+                })
+                .collect();
+            let name: String = person
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("Participant")
+                .chars()
+                .take(48)
+                .collect();
+            people.push(json!({
+                "name": name,
+                "sharing": sharing,
+                "transcribing": metadata.get("liveTranscription") == Some(&Value::Bool(true)),
+                "agents": agents,
+            }));
+            if people.len() >= 32 {
+                break;
+            }
+        }
+    }
+    json!({
+        "type": "presence",
+        "checkedAt": checked_at,
+        "startedAt": started.map(|seconds| seconds * 1000),
+        "participants": people,
+    })
+}
+
+pub(crate) fn valid_occurrence(sid: &str) -> bool {
+    sid.len() <= 64
+        && sid.starts_with("RM_")
+        && sid.len() > 3
+        && sid[3..].chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn random_code() -> String {
@@ -266,10 +556,14 @@ fn matches_key(expected: &[u8; 32], supplied: &[u8]) -> bool {
 }
 
 pub fn router(rooms: RoomService) -> Router {
+    let rooms = Arc::new(rooms);
+    if rooms.workspace_access.is_some() {
+        tokio::spawn(workspaces::guard(rooms.clone()));
+    }
     Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route("/rooms", get(upgrade))
-        .with_state(Arc::new(rooms))
+        .with_state(rooms)
 }
 
 async fn upgrade(
@@ -281,29 +575,214 @@ async fn upgrade(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let trusted_proxy = rooms.trusted_proxy(&headers);
-    ws.max_message_size(MAX_MESSAGE_BYTES)
-        .max_frame_size(MAX_MESSAGE_BYTES)
+    ws.max_message_size(MAX_AUDIO_MESSAGE_BYTES)
+        .max_frame_size(MAX_AUDIO_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            let _ = timeout(REQUEST_TIMEOUT, admit_socket(socket, rooms, trusted_proxy)).await;
+            admit_socket(socket, rooms, trusted_proxy).await;
         })
 }
 
 async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_proxy: bool) {
-    let Some(Ok(Message::Text(message))) = socket.recv().await else {
+    let Ok(Some(Ok(Message::Text(message)))) = timeout(REQUEST_TIMEOUT, socket.recv()).await else {
         return;
     };
+    if message.len() > MAX_MESSAGE_BYTES {
+        return;
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let reply = serde_json::from_str::<Request>(&message)
+    let request = serde_json::from_str::<Request>(&message);
+    match request {
+        Ok(Request::Workspace(input)) => {
+            workspaces::serve(&mut socket, rooms, &message, input).await;
+            return;
+        }
+        Ok(Request::Presence {
+            community,
+            room,
+            key,
+        }) => {
+            let meeting = Request::Meeting {
+                name: "Presence".into(),
+                community,
+                room,
+                picture: None,
+                key,
+            };
+            let reply = match rooms.admit(meeting, now.as_millis() as u64, trusted_proxy) {
+                Ok(Reply::Admitted { room, .. }) => presence(&rooms, &room).await,
+                Ok(_) => serde_json::json!({"type":"error","error":"Invalid room request."}),
+                Err(error) => serde_json::json!({"type":"error","error":error}),
+            };
+            let _ = socket.send(Message::Text(reply.to_string().into())).await;
+            return;
+        }
+        Ok(Request::Service) => {
+            let workspace = rooms.workspace_access.as_ref();
+            // Clients poll pre-join presence only when this is advertised: an older broker would
+            // treat a presence request as an admission and mint a join token.
+            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin()), "presence":true});
+            let _ = socket.send(Message::Text(value.to_string().into())).await;
+            return;
+        }
+        _ => {}
+    }
+    let shared = request
+        .as_ref()
+        .is_ok_and(|request| matches!(request, Request::Captions { .. }));
+    let listening = request
+        .as_ref()
+        .is_ok_and(|request| matches!(request, Request::Listen { .. }));
+    let mut reply = request
         .map_err(|_| "Invalid room request.")
         .and_then(|request| rooms.admit(request, now.as_millis() as u64, trusted_proxy))
         .unwrap_or_else(|error| Reply::Error { error });
-    if let Ok(text) = serde_json::to_string(&reply) {
+    if !shared && !listening {
+        if let Reply::Admitted {
+            room,
+            occurrence_id,
+            ..
+        } = &mut reply
+        {
+            *occurrence_id = rooms.occurrence(room).await;
+        }
+    }
+    if shared {
+        match reply {
+            Reply::Admitted { room, .. } => captions::serve(&mut socket, &rooms, &room, None).await,
+            error => {
+                if let Ok(text) = serde_json::to_string(&error) {
+                    let _ = socket.send(Message::Text(text.into())).await;
+                }
+            }
+        }
+    } else if listening && matches!(&reply, Reply::Admitted { .. }) {
+        if rooms.transcription_url.is_none() {
+            let _ = socket.send(Message::Text(r#"{"type":"error","error":"Live transcription is not configured on this meeting service."}"#.into())).await;
+        } else {
+            transcribe_socket(&mut socket, &rooms).await;
+        }
+    } else if let Ok(text) = serde_json::to_string(&reply) {
         let _ = socket.send(Message::Text(text.into())).await;
     }
     let _ = socket.send(Message::Close(None)).await;
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AudioChunk {
+    seq: u64,
+    speaker_id: String,
+    speaker_name: String,
+    started_at: u64,
+    ended_at: u64,
+    wav: String,
+}
+
+fn decode_chunk(chunk: &AudioChunk, previous: u64) -> Result<Vec<u8>, &'static str> {
+    if chunk.seq <= previous
+        || chunk.speaker_id.is_empty()
+        || chunk.speaker_id.len() > 128
+        || chunk.speaker_name.len() > 192
+        || chunk.speaker_name.chars().any(char::is_control)
+        || chunk.ended_at <= chunk.started_at
+        || chunk.ended_at - chunk.started_at > 11_000
+        || chunk.wav.len() > 427_000
+    {
+        return Err("Invalid audio segment.");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&chunk.wav)
+        .map_err(|_| "Invalid audio encoding.")?;
+    if !(44..=320_044).contains(&bytes.len()) || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE"
+    {
+        return Err("Expected a bounded WAV segment.");
+    }
+    Ok(bytes)
+}
+
+async fn transcribe_socket(socket: &mut WebSocket, rooms: &RoomService) {
+    let Some(url) = &rooms.transcription_url else {
+        return;
+    };
+    if socket
+        .send(Message::Text(r#"{"type":"listening"}"#.into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let mut previous = 0;
+    while let Ok(Some(Ok(message))) = timeout(Duration::from_secs(90), socket.recv()).await {
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+        if matches!(message, Message::Ping(_) | Message::Pong(_)) {
+            continue;
+        }
+        let Message::Text(text) = message else {
+            break;
+        };
+        if text.as_str() == r#"{"type":"ping"}"# {
+            if socket
+                .send(Message::Text(r#"{"type":"pong"}"#.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
+        let Ok(chunk) = serde_json::from_str::<AudioChunk>(&text) else {
+            break;
+        };
+        let Ok(bytes) = decode_chunk(&chunk, previous) else {
+            break;
+        };
+        previous = chunk.seq;
+        let Ok(_job) = rooms.transcription_jobs.try_acquire() else {
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"error","error":"Transcription is busy. Stop and try again."}"#
+                        .into(),
+                ))
+                .await;
+            break;
+        };
+        let response = timeout(Duration::from_secs(30), async {
+            let mut response = rooms
+                .http
+                .post(url.clone())
+                .header("Content-Type", "audio/wav")
+                .body(bytes)
+                .send()
+                .await?
+                .error_for_status()?;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if bytes.len() + chunk.len() > 24_000 {
+                    return Err(anyhow::anyhow!("Oversized transcript"));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok::<serde_json::Value, anyhow::Error>(serde_json::from_slice(&bytes)?)
+        })
+        .await;
+        let Ok(Ok(value)) = response else {
+            let _ = socket.send(Message::Text(r#"{"type":"error","error":"Speech transcription failed. Stop and try again."}"#.into())).await;
+            break;
+        };
+        let result = serde_json::json!({"type":"transcript", "seq":chunk.seq,"speakerId":chunk.speaker_id,"speakerName":chunk.speaker_name,"startedAt":chunk.started_at,"endedAt":chunk.ended_at,"segments":value.get("segments").unwrap_or(&serde_json::Value::Null)});
+        if socket
+            .send(Message::Text(result.to_string().into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -397,7 +876,7 @@ mod tests {
         assert_eq!(first["video"]["canPublishData"], false);
         assert_eq!(
             first["video"]["canPublishSources"],
-            serde_json::json!(["microphone", "camera", "screen_share"])
+            serde_json::json!(["microphone", "camera", "screen_share", "screen_share_audio"])
         );
         let metadata: serde_json::Value =
             serde_json::from_str(first["metadata"].as_str().unwrap()).unwrap();
@@ -411,6 +890,78 @@ mod tests {
                 .admit(meeting(origin, room, Some("meeting-key")), 0, false)
                 .is_err());
         }
+    }
+
+    #[test]
+    fn speech_and_shared_audio_keep_the_meeting_admission_boundary() {
+        let service = RoomService::new(
+            Url::parse("ws://127.0.0.1:7880").unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-creation-key",
+        );
+        let listen = || Request::Listen {
+            name: "Alex".into(),
+            community: "https://buzz.example.org".into(),
+            room: "General Voice".into(),
+            picture: None,
+            key: None,
+        };
+        assert!(service.admit(listen(), 0, false).is_err());
+        let reply = service.admit(listen(), 0, true).unwrap();
+        let value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(value["capabilities"]["screenAudio"], true);
+        assert_eq!(value["capabilities"]["transcription"], false);
+        let token = claims(reply);
+        assert_eq!(token["video"]["canUpdateOwnMetadata"], true);
+        assert_eq!(token["video"]["canPublishData"], false);
+        let service =
+            service.with_transcriber(Url::parse("http://127.0.0.1:8092/transcribe").unwrap());
+        assert_eq!(
+            serde_json::to_value(service.admit(listen(), 0, true).unwrap()).unwrap()
+                ["capabilities"]["transcription"],
+            true
+        );
+        let quick = service
+            .admit(
+                Request::Create {
+                    name: "Alex".into(),
+                    key: Some("test-creation-key".into()),
+                },
+                0,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&quick).unwrap()["capabilities"]["screenAudio"],
+            false
+        );
+        assert_eq!(
+            claims(quick)["video"]["canPublishSources"],
+            serde_json::json!(["screen_share"])
+        );
+    }
+
+    #[test]
+    fn rejects_replayed_oversized_and_invalid_speech_segments() {
+        let mut wav = vec![0_u8; 44];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        let mut chunk = AudioChunk {
+            seq: 1,
+            speaker_id: "speaker-one".into(),
+            speaker_name: "Same display name".into(),
+            started_at: 1000,
+            ended_at: 2000,
+            wav: base64::engine::general_purpose::STANDARD.encode(wav),
+        };
+        assert!(decode_chunk(&chunk, 0).is_ok());
+        assert!(decode_chunk(&chunk, 1).is_err());
+        chunk.ended_at = 20_000;
+        assert!(decode_chunk(&chunk, 0).is_err());
+        chunk.ended_at = 2000;
+        chunk.wav = "A".repeat(427_001);
+        assert!(decode_chunk(&chunk, 0).is_err());
     }
 
     #[test]
@@ -478,5 +1029,133 @@ mod tests {
                 .admit(request(), 0, service.trusted_proxy(&headers))
                 .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn admission_reports_the_media_room_occurrence_and_survives_its_absence() {
+        use axum::{routing::post, Json};
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_tungstenite::tungstenite::Message as Ws;
+        let created = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let failing = Arc::new(AtomicUsize::new(0));
+        let (seen, fail) = (created.clone(), failing.clone());
+        let media = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let media_url = format!("ws://{}", media.local_addr().unwrap());
+        let media_app = Router::new().route(
+            "/twirp/livekit.RoomService/CreateRoom",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let (seen, fail) = (seen.clone(), fail.clone());
+                async move {
+                    if fail.load(Ordering::SeqCst) > 0 {
+                        return Err(StatusCode::SERVICE_UNAVAILABLE);
+                    }
+                    seen.lock().unwrap().push(body);
+                    Ok(Json(
+                        serde_json::json!({"sid":"RM_Occurrence1","name":"ignored"}),
+                    ))
+                }
+            }),
+        );
+        let media_task = tokio::spawn(async move { axum::serve(media, media_app).await.unwrap() });
+        let service = RoomService::new(
+            Url::parse(&media_url).unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let broker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let broker_url = format!("ws://{}/rooms", broker.local_addr().unwrap());
+        let broker_task =
+            tokio::spawn(async move { axum::serve(broker, router(service)).await.unwrap() });
+        let admit = || async {
+            let (mut socket, _) = tokio_tungstenite::connect_async(&broker_url).await.unwrap();
+            socket
+                .send(Ws::Text(
+                    serde_json::json!({"type":"meeting","name":"Alex","community":"https://buzz.example/","room":"General Voice","key":"test-access"})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let Some(Ok(Ws::Text(text))) = socket.next().await else {
+                panic!("no admission")
+            };
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()
+        };
+        let first = admit().await;
+        assert_eq!(first["type"], "admitted");
+        assert_eq!(first["occurrenceId"], "RM_Occurrence1");
+        let body = created.lock().unwrap()[0].clone();
+        assert_eq!(body["name"], first["room"]);
+        assert_eq!(body["departure_timeout"], DEPARTURE_TIMEOUT);
+        failing.store(1, Ordering::SeqCst);
+        let degraded = admit().await;
+        assert_eq!(degraded["type"], "admitted");
+        assert!(degraded.get("occurrenceId").is_none());
+        assert!(
+            !valid_occurrence("RM_") && !valid_occurrence("XX_abc") && !valid_occurrence("RM_a\"b")
+        );
+        media_task.abort();
+        broker_task.abort();
+    }
+
+    #[tokio::test]
+    async fn presence_lists_people_sharing_and_agents_without_the_speech_worker() {
+        use axum::{routing::post, Json};
+        let media = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", media.local_addr().unwrap());
+        let app = Router::new()
+            .route("/twirp/livekit.RoomService/ListRooms", post(|| async { Json(serde_json::json!({"rooms":[{"name":"meeting-x","creation_time":"1700000000"}]})) }))
+            .route("/twirp/livekit.RoomService/ListParticipants", post(|| async { Json(serde_json::json!({"participants":[
+                {"identity":"transcription-1","name":"Speech"},
+                {"identity":"a","name":"Riley","metadata":"{\"liveAgents\":[{\"name\":\"Studio\",\"mode\":\"act\"}]}","tracks":[{"source":"SCREEN_SHARE"}]},
+                {"identity":"b","name":"Sam","metadata":"{\"liveTranscription\":true}","tracks":[{"source":"MICROPHONE"}]}
+            ]})) }));
+        let task = tokio::spawn(async move { axum::serve(media, app).await.unwrap() });
+        let service = RoomService::new(
+            Url::parse(&url).unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let value = presence(&service, "meeting-x").await;
+        assert_eq!(value["type"], "presence");
+        assert_eq!(value["startedAt"], 1_700_000_000_000u64);
+        assert_eq!(
+            value["participants"],
+            serde_json::json!([
+                {"name":"Riley","sharing":true,"transcribing":false,"agents":[{"name":"Studio","mode":"act"}]},
+                {"name":"Sam","sharing":false,"transcribing":true,"agents":[]}
+            ])
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn service_reply_advertises_presence_so_clients_can_tell_older_brokers_apart() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as Ws;
+        let service = RoomService::new(
+            Url::parse("ws://127.0.0.1:7880").unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let broker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/rooms", broker.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(broker, router(service)).await.unwrap() });
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        socket
+            .send(Ws::Text(r#"{"type":"service"}"#.into()))
+            .await
+            .unwrap();
+        let Some(Ok(Ws::Text(text))) = socket.next().await else {
+            panic!("no service reply")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "service");
+        assert_eq!(value["presence"], true);
+        task.abort();
     }
 }
