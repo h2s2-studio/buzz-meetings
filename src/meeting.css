@@ -340,3 +340,44 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 /* The viewer-quality menu keeps its label; the caption actions wrap instead. */
 .meeting-view-actions { flex-wrap: wrap; justify-content: flex-end; }
 .meeting-view-actions select { flex: 0 0 auto; min-width: 8rem; }
+
+/* Documents & boards (design screens 4 and 6). */
+.meeting-documents, .meeting-document-editor { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; overflow: auto; padding: var(--space-panel-inset); }
+.meeting-documents-header, .meeting-document-header { display: flex; align-items: center; gap: var(--space-2); justify-content: space-between; }
+.meeting-documents-header h3 { margin: 0; }
+.meeting-documents-preview { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--affordance-subtle); color: var(--text-subtle); }
+.meeting-document-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); }
+.meeting-document-card { display: grid; gap: var(--space-1); width: 100%; padding: var(--space-3); border: 1px solid var(--border-standard); border-radius: var(--radius-container); background: var(--surface-message); color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.meeting-document-card:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.meeting-document-title { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: var(--type-weight-medium); }
+.meeting-document-authors { display: inline-flex; gap: var(--space-1); }
+.meeting-author-chip { display: inline-grid; place-items: center; min-width: 1.25rem; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--affordance-subtle); color: var(--text-standard); font-size: var(--text-caption); }
+.meeting-document-body { display: grid; gap: var(--space-3); }
+.meeting-document-block { display: grid; gap: var(--space-1); padding-inline-start: var(--space-2); border-inline-start: 2px solid transparent; }
+.meeting-document-block[data-conflict] { border-inline-start-color: var(--border-warning); }
+.meeting-document-text { width: 100%; box-sizing: border-box; resize: vertical; padding: var(--space-2); border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: inherit; font: inherit; line-height: var(--text-body--line-height); }
+.meeting-document-text:hover { border-color: var(--border-standard); }
+.meeting-document-text:focus { outline: none; border-color: var(--border-focus); background: var(--surface-base); }
+.meeting-document-text[data-type="heading"] { font-weight: var(--type-weight-medium); font-size: var(--text-body-lg); }
+.meeting-document-author { display: flex; align-items: center; gap: var(--space-1); margin: 0; }
+.meeting-document-conflict, .meeting-document-notice { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-container); background: var(--affordance-subtle); }
+.meeting-document-notice { display: flex; align-items: center; justify-content: space-between; margin: 0; }
+.meeting-document-conflict p { margin: 0; }
+.meeting-document-conflict-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.meeting-document-compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.meeting-document-compare h4, .meeting-document-compare p { margin: 0; }
+.meeting-document-footer { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border-standard); color: var(--text-subtle); }
+.meeting-editor-pane { flex-basis: 26rem; width: 26rem; }
+@container meeting (max-width: 52rem) { .meeting-editor-pane { flex-basis: 20rem; width: 20rem; } }
+.meeting-record-artifacts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); }
+.meeting-record-artifact { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--border-standard); border-radius: var(--radius-container); }
+.meeting-record-artifact-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.meeting-workspace-call { display: flex; flex-direction: column; min-height: 0; }
+.meeting-workspace-call > .meeting-body { flex: 1; min-height: 0; }
+.meeting-workspace-call > .meeting-footer { flex: 0 0 auto; }
+.meeting-document-add { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.meeting-preview-badge { margin-inline-start: var(--space-1); padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--affordance-subtle); color: var(--text-subtle); }
+/* Eight workspace views fit one row; in narrow panes the row scrolls instead of wrapping over the stage. */
+.meeting-workspace-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.meeting-workspace-tabs > * { flex: 0 0 auto; }
+@container meeting (max-width: 52rem) { .meeting-workspace-tabs { mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent); padding-inline-end: var(--space-8); } }

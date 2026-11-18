@@ -81,3 +81,14 @@ test("a storage that keeps refusing to open is not retried on every relay update
   assert.equal(opens,1); assert.equal(emits,0);
   records.close(); connection.close();
 });
+test("a record lists the documents and boards made in its call with the revision current when saved",async () => {
+  const host = new WorkspaceHost(), connection = client(host), records = meetingRecords(relay(connection),connection.storage);
+  const made = [{ id:"30000000-0000-4000-8000-000000000001", kind:"document", title:"Turn 3 playtest brief", revision:"d".repeat(64), number:3 }];
+  const seen = [];
+  await records.save(general,transcript,agents,{ artifactsFor:(channelId,occurrenceId) => { seen.push([channelId,occurrenceId]); return made; } });
+  assert.deepEqual(seen,[[general,"RM_call"]]);
+  assert.deepEqual(records.snapshot().records[0].value.artifacts,made);
+  await records.save(general,{ ...transcript, segments:[{ ...transcript.segments[0], id:"other:1" }] },agents);
+  assert.equal(records.snapshot().records.some(record => record.value.artifacts === undefined),true,"no artifacts, no field");
+  records.close(); connection.close();
+});

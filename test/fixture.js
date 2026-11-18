@@ -1,6 +1,8 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { fixtureWorkspaceHost } from "./workspace-browser.js";
+import { memoryArtifactStore } from "../src/artifact-store.ts";
+import { applyEdit } from "../src/artifacts.ts";
 const cleanups = [], listeners = new Set(), captures = [], screenAudioCaptures = [], microphones = [], cameras = [], contexts = [];
 const query = new URLSearchParams(location.search);
 const displayName = query.get("viewer") || "Alex";
@@ -140,11 +142,19 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
   const value = Reflect.get(target, property, target);
   return typeof value === "function" ? value.bind(target) : value;
 } }) });
-const { apply } = await import("../plugin.js");
+const { apply, inject } = await import("../plugin.js");
 // Like Buzz, artifact storage cannot open before an identity and community are selected.
 const artifactStorage = { open(definition) { if (!connection.viewer || !connection.origin) throw new Error("Artifact storage needs a plugin, identity and relay"); return host.storage.open(definition); } };
 if (query.has("cold")) connection = { ...connection, status: "connecting", origin: undefined, scope: undefined };
-apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
+// Documents use an in-memory store the tests can drive (remote edits as another person).
+const meetingsArtifactStore = memoryArtifactStore(() => connection.viewer, { durable: query.has("durable-documents") });
+globalThis.meetingsTestArtifactStore = meetingsArtifactStore;
+// Like Buzz, reading a context property the plugin did not inject throws.
+const strict = context => new Proxy(context, { get(target, property, receiver) {
+  if (typeof property === "string" && property !== "effect" && !inject.includes(property)) throw new Error(`cannot get property "${property}" without inject`);
+  return Reflect.get(target, property, receiver);
+} });
+apply(strict({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
@@ -152,7 +162,7 @@ apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : native
   settingsCards: { register(entry) { settings.set(entry.id, entry); } },
   navigation: { async open(target) { navigationTargets.push(target); if (target.kind !== "conversation") navigation?.(target); return { status: "opened" }; } },
   effect(setup) { cleanups.push(setup()); },
-});
+}));
 window.meetingTest = {
   setAgentRunning(value) { runtimeRunning=value; for(const fn of runtimeListeners) fn(); },
   agentWakes: () => agentWakes,
@@ -181,6 +191,12 @@ window.meetingTest = {
   captureStates: () => captures.map(track => track.readyState),
   releaseMicrophone() { holdMicrophone = false; releaseMicrophone?.(); },
   selectCommunity() { connection = { ...connection, status: "ready", origin, scope: origin + ":" + viewer }; for (const listener of listeners) listener(); },
+  documents: () => meetingsArtifactStore.list("10000000-0000-4000-8000-000000000001").map(item => ({ id: item.id, title: item.title, number: item.head.number, texts: item.head.content.nodes.map(node => node.text) })),
+  // Land a concurrent revision as someone else: set a paragraph's text, or remove it.
+  async remoteDocumentEdit({ by = "a".repeat(64), index = 0, text, remove = false } = {}) {
+    const [item] = meetingsArtifactStore.list("10000000-0000-4000-8000-000000000001");
+    await meetingsArtifactStore.remote(item.channelId, item.id, by, content => applyEdit(content, { opId: crypto.randomUUID(), base: "", actor: by, at: Date.now(), ops: [remove ? { type: "remove", id: content.nodes[index].id } : { type: "update", id: content.nodes[index].id, fields: { text } }] }));
+  },
   switchCommunity() { connection = { ...connection, origin: "https://another.example", scope: "another" }; for (const listener of listeners) listener(); },
   disable() { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); },
 };

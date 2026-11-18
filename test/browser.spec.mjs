@@ -520,6 +520,50 @@ test("shows who is in a workspace call before joining, with an audio check and n
     if (info.project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-overview.png" });
   } finally { await other.close(); }
 });
+test("edits a document beside the live stage, then reopens it from the meeting record as presented and current", async ({ page }, info) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition to save the meeting record");
+  test.setTimeout(150000);
+  await proxyWorkspaceVoice(page);
+  // Record cards only reference documents from a store that survives restarts.
+  await page.goto(`${fixture}?realm=docs-call-${info.project.name}&speech&durable-documents&viewer=Alex`);
+  await linkGeneral(page);
+  const view = workspace(page), tabs = view.getByRole("group", { name: "Workspace views" }), callbar = view.getByRole("group", { name: "Meeting controls" });
+  await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  const edit = callbar.getByRole("button", { name: "Edit together", exact: true });
+  await expect(edit).toBeEnabled(); await expect(edit).toHaveAttribute("aria-pressed", "false");
+  await edit.click();
+  const pane = view.getByRole("complementary", { name: "Edit together" });
+  await pane.getByRole("button", { name: "New document", exact: true }).click();
+  await pane.getByLabel("Document title", { exact: true }).fill("Turn 3 playtest brief"); await pane.getByLabel("Document title", { exact: true }).blur();
+  await pane.getByLabel("Paragraph 1", { exact: true }).fill("The braking marker sits behind the bridge shadow.");
+  await expect(pane.getByRole("status").filter({ hasText: "Saved · revision 3" })).toBeVisible();
+  // The stage and controls stay live beside the editor.
+  await expect(edit).toHaveAttribute("aria-pressed", "true");
+  await expect(callbar.getByRole("button", { name: "Leave room", exact: true })).toBeVisible();
+  if (info.project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-edit-together.png" });
+  await tabs.getByRole("button", { name: "Transcript", exact: true }).click();
+  const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
+  await expect.poll(() => transcript.getByRole("region", { name: "Transcript entries" }).getByRole("listitem").count(), { timeout: 45000 }).toBeGreaterThan(0);
+  // A later edit after the record is saved: "As presented" stays at the saved revision.
+  await transcript.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
+  await tabs.getByRole("button", { name: "Voice", exact: true }).click();
+  await pane.getByLabel("Paragraph 1", { exact: true }).fill("Move the marker out of the shadow.");
+  await expect(pane.getByRole("status").filter({ hasText: "Saved · revision 4" })).toBeVisible();
+  await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
+  await tabs.getByRole("button", { name: "Meeting records", exact: true }).click();
+  const records = view.getByRole("region", { name: "Saved meeting records" });
+  await records.getByRole("button", { name: /General Voice/ }).click();
+  const made = records.getByRole("region", { name: "Made in this meeting" });
+  await expect(made).toContainText("Turn 3 playtest brief");
+  await made.getByRole("button", { name: "As presented (rev 3)", exact: true }).click();
+  const presented = view.getByRole("region", { name: "Document: Turn 3 playtest brief" });
+  await expect(presented.getByRole("status").filter({ hasText: "As presented · revision 3" })).toBeVisible();
+  await expect(presented).toContainText("The braking marker sits behind the bridge shadow.");
+  await presented.getByRole("button", { name: "Open current", exact: true }).click();
+  await expect(presented.getByLabel("Paragraph 1", { exact: true })).toHaveValue("Move the marker out of the shadow.");
+});
 test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
   await proxyWorkspaceVoice(page);
@@ -989,6 +1033,50 @@ test("never asks an older meeting service for presence and says who’s here app
   expect(requests.filter(request => request.presence || request.type === "presence")).toEqual([]);
   expect(requests.filter(request => request.type === "workspace")).toEqual([]);
   await expect(view.getByRole("alert")).toHaveCount(0);
+});
+test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compare and explains a kept removal", async ({ page }) => {
+  await page.goto(`${fixture}?realm=documents`);
+  await linkGeneral(page);
+  const view = workspace(page);
+  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ }).click();
+  const list = view.getByRole("region", { name: "Documents and boards" });
+  await expect(list.getByRole("note")).toContainText("Preview: documents aren’t saved to Buzz yet.");
+  await list.getByRole("button", { name: "New document", exact: true }).click();
+  const editor = view.getByRole("region", { name: /^Document: / });
+  const footer = editor.getByRole("status").filter({ hasText: /Saved|Saving|Unsaved/ });
+  await editor.getByLabel("Document title", { exact: true }).fill("Turn 3 playtest brief"); await editor.getByLabel("Document title", { exact: true }).blur();
+  await editor.getByLabel("Paragraph 1", { exact: true }).fill("Seven of nine players missed the apex.");
+  await expect(footer).toContainText("Saved · revision 3");
+  await editor.getByRole("button", { name: "Add paragraph", exact: true }).click();
+  await editor.getByLabel("Paragraph 2", { exact: true }).fill("The braking marker sits behind the bridge shadow.");
+  await expect(footer).toContainText("Saved · revision 5");
+  // Someone else changes paragraph 2 while Sam is typing in it.
+  await editor.getByLabel("Paragraph 2", { exact: true }).fill("We should test again on Thursday.");
+  await page.evaluate(() => meetingTest.remoteDocumentEdit({ by: "b".repeat(64), index: 1, text: "Retest planned for Friday." }));
+  const clash = editor.getByRole("group", { name: "Your version" });
+  await expect(clash).toContainText("Research helper changed this paragraph while you were typing.");
+  await expect(editor.getByLabel("Paragraph 2", { exact: true })).toHaveValue("Retest planned for Friday.");
+  await clash.getByRole("button", { name: "Compare", exact: true }).click();
+  await expect(clash).toContainText("Yours"); await expect(clash).toContainText("We should test again on Thursday.");
+  await clash.getByRole("button", { name: "Keep mine", exact: true }).click();
+  await expect(clash).toHaveCount(0);
+  await expect(editor.getByLabel("Paragraph 2", { exact: true })).toHaveValue("We should test again on Thursday.");
+  // The clashing save had nothing else to publish; Keep mine is revision 7.
+  await expect(footer).toContainText("Saved · revision 7");
+  // Sam removes paragraph 1 while it is being edited elsewhere: it is kept, and the editor says why.
+  await editor.getByLabel("Paragraph 2", { exact: true }).fill("Thursday, after the patch.");
+  await page.evaluate(() => meetingTest.remoteDocumentEdit({ by: "b".repeat(64), index: 0, text: "Seven of nine players braked late." }));
+  await editor.getByRole("button", { name: "Remove paragraph 1", exact: true }).click();
+  await expect(editor.getByRole("status").filter({ hasText: "Kept — Research helper edited this while you were removing it." })).toBeVisible();
+  await expect(editor.getByLabel("Paragraph 1", { exact: true })).toHaveValue("Seven of nine players braked late.");
+  await expect.poll(() => page.evaluate(() => meetingTest.documents()[0].texts)).toEqual(["Seven of nine players braked late.", "Thursday, after the patch."]);
+  // Typing right before closing is flushed, not dropped.
+  await editor.getByRole("button", { name: "Add heading", exact: true }).click();
+  await editor.getByLabel("Heading 3", { exact: true }).fill("Next session");
+  await editor.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => meetingTest.documents()[0].texts.at(-1))).toBe("Next session");
+  await expect(list.getByRole("button", { name: /Turn 3 playtest brief/ })).toContainText("Document · revision");
+  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ })).toContainText("Preview");
 });
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);
