@@ -401,7 +401,7 @@ async function proxyWorkspaceVoice(page) {
     let server;
     socket.onMessage(raw => {
       const request = JSON.parse(raw);
-      if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin }));
+      if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin, presence: true }));
       if (!server) { server = socket.connectToServer(); server.onMessage(message => socket.send(message)); }
       if (request.type === "workspace" && request.presence) return server.send(JSON.stringify({ type: "presence", community: new URL(request.community).origin + "/", room: `workspace ${request.channel}`.slice(0, 64) }));
       if (request.type === "workspace") {
@@ -499,7 +499,8 @@ test("shows who is in a workspace call before joining, with an audio check and n
     await linkGeneral(page);
     const view = workspace(page);
     await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(view.getByRole("heading", { name: "No one is in the call" })).toBeVisible({ timeout: 15000 });
+    // Before voice is enabled nothing is known, so the Overview does not claim the call is empty.
+    await expect(view.getByRole("heading", { name: "Who’s in the call" })).toBeVisible({ timeout: 15000 });
     await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
     await expect(view.getByRole("group", { name: "Meeting controls" }).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
     await view.getByRole("group", { name: "Meeting controls" }).getByRole("button", { name: "Leave room", exact: true }).click();
