@@ -73,12 +73,17 @@ test("remove versus update: the update wins in both directions and no text is lo
   assert.deepEqual(texts(removal.content), ["Seven of nine players missed the apex.", "Agent's addition."]);
 });
 
-test("an insert anchored to a paragraph someone removed still lands, at the end", () => {
+test("an insert anchored to a removed paragraph goes after its nearest surviving predecessor", () => {
   const { doc, saw, causes } = brief();
-  const head = applyEdit(doc, edit(agent, rev(2), [{ type: "remove", id: saw.id }]));
   const evidence = paragraph("Clip at 03:12 shows three players lifting.");
-  const result = rebase(doc, head, rev(3), edit(riley, rev(2), [{ type: "insert", node: evidence, after: saw.id }]));
-  assert.deepEqual(texts(result.content), [causes.text, evidence.text]);
+  // Nothing survives before the removed anchor: the insert goes to the start, not the end.
+  const first = rebase(doc, applyEdit(doc, edit(agent, rev(2), [{ type: "remove", id: saw.id }])), rev(3), edit(riley, rev(2), [{ type: "insert", node: evidence, after: saw.id }]));
+  assert.deepEqual(texts(first.content), [evidence.text, causes.text]);
+  // The anchor's predecessor survives: the insert follows it.
+  const third = paragraph("Next steps.");
+  const longer = applyEdit(doc, edit(agent, rev(2), [{ type: "insert", node: third, after: causes.id }]));
+  const second = rebase(longer, applyEdit(longer, edit(agent, rev(3), [{ type: "remove", id: causes.id }])), rev(4), edit(riley, rev(3), [{ type: "insert", node: evidence, after: causes.id }]));
+  assert.deepEqual(texts(second.content), [saw.text, evidence.text, third.text]);
 });
 
 test("on a board, moving a card and editing its text merge; grouping survives; removing a group keeps its cards", () => {
@@ -144,4 +149,84 @@ test("a paragraph inserted and moved in the same edit is not a position conflict
   const result = rebase(doc, head, rev(3), edit(riley, rev(2), [{ type: "insert", node: fresh, after: causes.id }, { type: "move", id: fresh.id, after: null }]));
   assert.deepEqual(result.conflicts, []);
   assert.deepEqual(texts(result.content), ["Next session: Thursday.", "Changed.", causes.text]);
+});
+
+// Review items on PR #9, one test each.
+test("later operations in one edit override earlier ones instead of conflicting with them", () => {
+  const { doc, causes } = brief();
+  const result = rebase(doc, doc, rev(3), edit(riley, rev(2), [{ type: "update", id: causes.id, fields: { text: "A" } }, { type: "update", id: causes.id, fields: { text: "B" } }]));
+  assert.deepEqual(result.conflicts, []); assert.equal(result.content.nodes[1].text, "B");
+  // A held conflict keeps the latest local value.
+  const head = applyEdit(doc, edit(agent, rev(2), [{ type: "update", id: causes.id, fields: { text: "Head" } }]));
+  const held = rebase(doc, head, rev(3), edit(riley, rev(2), [{ type: "update", id: causes.id, fields: { text: "A" } }, { type: "update", id: causes.id, fields: { text: "B" } }]));
+  assert.deepEqual(held.conflicts.map(conflict => conflict.mine), ["B"]);
+});
+
+test("moving a paragraph is not a conflict when others only inserted or removed around it", () => {
+  const { doc, saw, causes } = brief();
+  const third = paragraph("Three.");
+  const three = applyEdit(doc, edit(agent, rev(2), [{ type: "insert", node: third, after: causes.id }]));
+  const head = applyEdit(three, edit(agent, rev(3), [{ type: "insert", node: paragraph("New above three."), after: causes.id }]));
+  const result = rebase(three, head, rev(4), edit(riley, rev(3), [{ type: "move", id: third.id, after: null }]));
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(texts(result.content), ["Three.", saw.text, causes.text, "New above three."]);
+  // Both sides moved it: the head's place stays and mine is held.
+  const moved = applyEdit(three, edit(agent, rev(3), [{ type: "move", id: third.id, after: saw.id }]));
+  const clash = rebase(three, moved, rev(4), edit(riley, rev(3), [{ type: "move", id: third.id, after: null }]));
+  assert.deepEqual(clash.conflicts.map(conflict => [conflict.field, conflict.mine, conflict.theirs]), [["position", null, saw.id]]);
+});
+
+test("updates may change only the fields allowed for the node type, and stored nodes carry no other keys", () => {
+  const { doc, causes } = brief();
+  for (const fields of [{ junk: "x" }, { author: riley }, { editedAt: 5 }, { x: 4 }, {}])
+    assert.throws(() => applyEdit(doc, edit(riley, rev(2), [{ type: "update", id: causes.id, fields }])), ArtifactError);
+  let board = createContent({ kind: "board", title: "B", createdBy: agent });
+  const marker = card("Marker", 0, 0);
+  board = applyEdit(board, edit(agent, rev(1), [{ type: "insert", node: marker }]));
+  assert.throws(() => applyEdit(board, edit(riley, rev(2), [{ type: "update", id: marker.id, fields: { x: 10 } }])), ArtifactError, "position is move-only");
+  assert.throws(() => parseContent(JSON.stringify({ ...doc, nodes: [{ ...doc.nodes[0], junk: 1 }] })), ArtifactError);
+});
+
+test("a removal that loses to someone else's edit is reported as kept", () => {
+  const { doc, causes } = brief();
+  const head = applyEdit(doc, edit(agent, rev(2), [{ type: "update", id: causes.id, fields: { text: "Agent's addition." } }]));
+  const result = rebase(doc, head, rev(3), edit(riley, rev(2), [{ type: "remove", id: causes.id }]));
+  assert.deepEqual(result.kept, [{ nodeId: causes.id, reason: "edited" }]);
+});
+
+test("board references are type-checked: groups must be groups, connectors join two distinct cards or groups", () => {
+  const base = createContent({ kind: "board", title: "B", createdBy: agent });
+  const a = card("a", 0, 0), b = card("b", 10, 0), connector = { id: id(), type: "connector", from: a.id, to: b.id, author: agent, editedAt: 1 };
+  const board = applyEdit(base, edit(agent, rev(1), [{ type: "insert", node: a }, { type: "insert", node: b }, { type: "insert", node: connector }]));
+  const bad = [
+    { ...card("c", 0, 0), groupId: a.id },
+    { id: id(), type: "connector", from: a.id, to: a.id, author: agent, editedAt: 1 },
+    { id: id(), type: "connector", from: a.id, to: connector.id, author: agent, editedAt: 1 },
+  ];
+  for (const node of bad) assert.throws(() => applyEdit(board, edit(agent, rev(2), [{ type: "insert", node }])), ArtifactError);
+  const self = id();
+  assert.throws(() => applyEdit(board, edit(agent, rev(2), [{ type: "insert", node: { id: self, type: "connector", from: self, to: a.id, author: agent, editedAt: 1 } }])), ArtifactError);
+});
+
+test("a restored node keeps its original author and time", () => {
+  let board = createContent({ kind: "board", title: "B", createdBy: agent });
+  const a = card("a", 0, 0), b = { ...card("b", 10, 0), author: sam, editedAt: 42 };
+  board = applyEdit(board, edit(agent, rev(1), [{ type: "insert", node: a }]));
+  board = applyEdit(board, edit(sam, rev(2), [{ type: "insert", node: b }]));
+  const writtenBy = board.nodes.find(node => node.id === b.id);
+  const head = applyEdit(board, edit(agent, rev(3), [{ type: "remove", id: b.id }]));
+  const result = rebase(board, head, rev(4), edit(riley, rev(3), [{ type: "insert", node: { id: id(), type: "connector", from: a.id, to: b.id, author: riley, editedAt: 1 } }]));
+  const back = result.content.nodes.find(node => node.id === b.id);
+  assert.deepEqual([back.author, back.editedAt], [writtenBy.author, writtenBy.editedAt]);
+});
+
+test("renaming changes the title, and both sides renaming holds a conflict", () => {
+  const { doc } = brief();
+  const renamed = applyEdit(doc, edit(riley, rev(2), [{ type: "rename", title: "Thursday test brief" }]));
+  assert.equal(renamed.title, "Thursday test brief");
+  assert.throws(() => applyEdit(doc, edit(riley, rev(2), [{ type: "rename", title: " " }])), ArtifactError);
+  const result = rebase(doc, renamed, rev(3), edit(sam, rev(2), [{ type: "rename", title: "Friday brief" }]));
+  assert.deepEqual(result.conflicts.map(conflict => [conflict.nodeId, conflict.field, conflict.mine, conflict.theirs]), [["", "title", "Friday brief", "Thursday test brief"]]);
+  const keep = resolveConflict(result.conflicts[0], "mine", { opId: id(), base: rev(3), actor: sam, at: 9 });
+  assert.equal(applyEdit(result.content, keep).title, "Friday brief");
 });
