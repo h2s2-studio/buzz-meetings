@@ -5,7 +5,7 @@ Buzz channel to keep its notes, conversation, and files available between calls.
 Existing voice rooms support cameras and simultaneous screen sharing through
 the Rust admission server and LiveKit.
 
-> Development branch: shared transcription, verified workspace voice, meeting records and live agents require the updated broker and speech worker. These changes are available for native testing; the published v0.2.1 release predates them.
+> Release 0.3.0 is a pre-release. Shared transcription, verified workspace voice, meeting records and live agents need the updated broker and speech worker ([deployment](docs/deployment.md)); per-call IDs and the pre-join participant list need the 0.3.0 broker. Documents and whiteboards are a preview and are not saved to Buzz yet.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
@@ -34,7 +34,7 @@ the app uses the community’s `/rooms` endpoint. For a separate service, open
 Access keys stay in memory and are cleared when your identity or community changes.
 
 The root contains the built `plugin.js` and `manifest.json`; Buzz does not run a
-build at install. Pin **Branch or tag** to `v0.2.1` for this release, or leave it
+build at install. Pin **Branch or tag** to `v0.3.0` for this release, or leave it
 empty to follow main and use **Check for updates**.
 
 ## Shared workspaces
