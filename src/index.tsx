@@ -1,4 +1,5 @@
 import { makeLiveAgents, type AgentRuntime } from "./live-agents";
+import { registerRecordSearch } from "./record-search";
 import { makeMeetingTranscription } from "./meeting-transcription";
 import { meetingRecords } from "./meeting-records";
 import { recordsUI } from "./records-ui";
@@ -84,6 +85,7 @@ export function apply(ctx: Context) {
   const transcript = makeMeetingTranscription(media);
   const liveAgents = makeLiveAgents(ctx, media, transcript);
   const records = meetingRecords(ctx.relay,ctx.artifactStorage);
+  registerRecordSearch(ctx, records);
   // Documents and boards. Until the native adapter lands (after Gate 0), revisions live
   // in memory only; tests may supply their own store.
   // Buzz throws when a plugin reads a context property it did not inject, so the
