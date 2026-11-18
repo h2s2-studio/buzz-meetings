@@ -99,3 +99,26 @@ live view uses. Copy and Download use the same format.
 An unsaved transcript is held in memory until it is saved and closed, or
 discarded. That includes earlier joins kept after a rejoin. It does not survive
 an app restart.
+
+## Documents and boards (model)
+
+`src/artifacts.ts` defines meeting documents and boards. Each revision is a full
+snapshot in one kind-45010 artifact (`studio.h2s2.meetings.document` or
+`.board`), capped at 48 KiB. The event's `title` tag follows the content title.
+
+- **Edits:** an edit carries a stable `opId` and its base revision. Its operations
+  are insert, update, move, remove and rename.
+- **Update fields:** updates may change only the fields allowed for a node type.
+  Document nodes allow text, href and type; cards and groups allow text and size;
+  connectors allow their endpoints. Position is move-only.
+- **References:** board references are type-checked.
+- **Conflicts:** when the relay reports a conflict, the editor rebases pending
+  edits onto the new head. The same field changed on both sides keeps the head
+  and holds the local value for Keep mine / Keep theirs. An update beats a
+  removal: removed nodes are restored with their original author, and a removal
+  that lost is reported.
+- **Anchors:** an insert whose anchor is gone follows the nearest surviving
+  predecessor from the base order.
+- **Authorship:** per-node `author` and `editedAt` are advisory. A revision is
+  signed by one identity, so only the revision signer is verifiable. Per-paragraph
+  author chips come from content; revision history shows signers.
