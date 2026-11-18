@@ -24,8 +24,13 @@ session. `meetings_task_record` records proposals or progress and publishes in t
 that agent through its native client. These calls do not borrow the owner's
 signer. Native Activity shows actual execution and provides Stop controls.
 
-**Remove** ends new agent input and notifications while the call’s
-transcription continues. **Pause transcription** detaches this viewer and
+**Remove** ends new agent input and notifications. Transcription here keeps
+running only if something else asked for it: this person opened **Transcript**,
+or another listening agent needs it. When the removed agent was the only
+requester, Remove also stops this client's transcription and the control says
+so (**Remove and stop transcription**). Capture ends when its last requester
+goes, so nobody is transcribed on behalf of an agent that has left. A failed
+**Add** releases only the capture that attempt requested. **Pause transcription** detaches this viewer and
 also ends its live-agent input. Other viewers can keep the shared stream running.
 Neither action cancels tasks already running; use
 **Stop task** for those. Leaving voice, changing community or disabling Meetings

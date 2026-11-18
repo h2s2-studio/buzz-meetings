@@ -627,6 +627,8 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   expect(messages.at(-1)).toMatchObject({ viewer: "b".repeat(64) });
   expect(messages.at(-1).text).toContain("Research summary");
   if (test.info().project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-live-agent.png" });
+  // This person opened Transcript first, so removing the agent leaves transcription running.
+  await expect(panel).not.toContainText("also stops transcription");
   await panel.getByRole("button", { name: "Remove Research helper from call", exact: true }).click();
   await expect(stage(other).getByRole("status").filter({ hasText: "agent listening" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
@@ -664,8 +666,13 @@ test("completes a task after the agent stops listening and opens its result from
   const task = { session_id, key: "playtest-brief", title: "Draft the playtest brief", status: "working" };
   await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), task);
   await expect(panel).toContainText("Research helper · Working · Saved in chat");
-  await panel.getByRole("button", { name: "Remove Research helper from call", exact: true }).click();
-  await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
+  // Only the agent asked for capture, so Remove says it also stops transcription.
+  const remove = panel.getByRole("button", { name: "Remove Research helper from call and stop transcription", exact: true });
+  await expect(remove).toHaveText("Remove and stop transcription");
+  await expect(remove).toHaveAccessibleDescription("Removing it also stops transcription here. Open Transcript first to keep it running.");
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+  await expect(controls(page).getByRole("button", { name: "Pause transcription", exact: true })).toHaveCount(0);
   // The agent finishes after listening stopped; the meeting reflects it.
   await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), { ...task, status: "done", result: "Brief posted in the thread." });
   await expect(panel).toContainText("Research helper · Done · Saved in chat");
@@ -841,15 +848,18 @@ test("adds two agents directly as call members with one transcription connection
   await sidebar(page).getByRole("button",{name:"Add agent",exact:true}).click();
   const agents=page.getByRole("region",{name:"Meeting agents",exact:true});
   await agents.getByRole("button",{name:"Add Research helper to call",exact:true}).click();
-  await expect(agents.getByRole("button",{name:"Remove Research helper from call",exact:true})).toBeVisible();
+  // Alone, the agent is the only reason for capture; with a second agent, neither is.
+  await expect(agents.getByRole("button",{name:"Remove Research helper from call and stop transcription",exact:true})).toBeVisible();
   await agents.getByRole("button",{name:"Add New helper to call",exact:true}).click();
   await expect(agents.getByRole("button",{name:"Remove New helper from call",exact:true})).toBeVisible();
+  await expect(agents.getByRole("button",{name:"Remove Research helper from call",exact:true})).toBeVisible();
   expect(connections).toBe(1);
   await expect(sidebar(page).getByRole("button",{name:"Research helper · Listening",exact:true})).toBeVisible();
   await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
   expect((await page.evaluate(()=>meetingTest.taskRequests())).filter(task=>task.text.includes("Live meeting session:")).length).toBe(2);
   await agents.getByRole("button",{name:"Remove Research helper from call",exact:true}).click();
   await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
+  await expect(agents.getByRole("button",{name:"Remove New helper from call and stop transcription",exact:true})).toBeVisible();
   await page.getByRole("button",{name:"Show transcript",exact:true}).click();
   const transcript=page.getByRole("complementary",{name:"Meeting transcript",exact:true});
   await expect(transcript.getByRole("region",{name:"Transcript entries"})).toContainText(/research|notes/i,{timeout:45000});

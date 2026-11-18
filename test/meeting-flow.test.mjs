@@ -115,3 +115,21 @@ test("an agent added before the call's occurrence is known files tasks under it,
   assert.deepEqual(flow.agents.tasksFor(general, "RM_late").map(task => task.title), ["Early task"]);
   flow.close();
 });
+
+test("Remove says when it also stops transcription, with and without an independent transcript viewer", async () => {
+  const flow = meetingFlow();
+  flow.join("RM_remove"); await flow.addAgent();
+  assert.equal(flow.agents.stopsCapture(flow.agent.pubkey), true);
+  // The person opens Transcript while the agent is capturing: their own interest now counts.
+  await flow.transcript.start();
+  assert.equal(flow.agents.stopsCapture(flow.agent.pubkey), false);
+  flow.agents.stop("", flow.agent.pubkey);
+  assert.equal(flow.transcript.snapshot().phase, "transcribing");
+  // Without an independent viewer, removing the agent ends capture.
+  flow.transcript.stop(); await flow.addAgent();
+  assert.equal(flow.agents.stopsCapture(flow.agent.pubkey), true);
+  flow.agents.stop("", flow.agent.pubkey);
+  assert.equal(flow.transcript.snapshot().phase, "paused");
+  assert.deepEqual(flow.announcements.at(-1).value, false);
+  flow.close();
+});

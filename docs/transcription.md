@@ -15,8 +15,12 @@ and transcript. Copy, download, search and speech announcements preserve that
 distinction; the agent always receives the full source ID and timing.
 
 **Pause transcription** detaches this viewer and its agents. Other viewers can
-continue transcribing. Removing an agent leaves transcription running and stops
-its new speech input; native **Stop task** controls work already assigned.
+continue transcribing; the status then reads "Paused for you · others are
+transcribing this call". Transcription here tracks who asked for it: this
+person (opening **Transcript**) or a listening agent. Removing an agent stops
+its new speech input, and also stops transcription here when that agent was
+the only requester; the Remove control says so beforehand. Native **Stop task**
+controls work already assigned.
 Closing the panel or browsing other content preserves the connection.
 
 Use search, **Copy**, or **Download** to work with the current text. **Save meeting

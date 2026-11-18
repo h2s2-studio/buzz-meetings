@@ -135,8 +135,12 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
         else if (!allowed(run)) stop("Listening stopped because channel access changed.", run.agent.pubkey);
       }
     });
+    let holders = transcript.holders().join(",");
     const stopTranscript = transcript.subscribe(() => {
       const source = transcript.snapshot();
+      // Who requested capture changes what Remove does; keep that visible.
+      const nextHolders = transcript.holders().join(",");
+      if (nextHolders !== holders) { holders = nextHolders; emit(); }
       for (const run of [...active.values()]) {
         if (run.transcriptCursor === undefined) continue;
         if (source.joinId !== run.joinId || !["transcribing", "reconnecting"].includes(source.phase)) { stop(source.error || (source.phase === "paused" ? "Agent input stopped because transcription paused." : ""), run.agent.pubkey); continue; }
@@ -181,6 +185,8 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     const runtime = ctx.agents?.snapshot(), owner = ctx.relay.snapshot().viewer;
     return !!runtime?.agents.some(agent => agent.pubkey === pubkey && agent.owner === owner && agent.place === "here" && runtime.running.some(running => running.key === agent.key));
   }
-  return { eligible, start, stop, tasksFor, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  /** True when this agent is the only remaining reason the call is being transcribed here. */
+  const stopsCapture = (pubkey: string) => { const current = transcript.holders(); return current.length === 1 && current[0] === `agent:${pubkey}`; };
+  return { eligible, start, stop, tasksFor, stopsCapture, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 export type LiveAgents = ReturnType<typeof makeLiveAgents>;

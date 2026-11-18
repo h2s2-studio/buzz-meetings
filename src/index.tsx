@@ -124,7 +124,9 @@ export function apply(ctx: Context) {
       if (call.watching !== id || call.screens.length) media.changeWatch(id);
     } else media.changeWatch();
   }
-  function openTranscript() { if (media.snapshot().phase === "connected" && media.snapshot().transcription && transcript.snapshot().phase === "idle") void transcript.start(); }
+  // Opening the transcript is this person's own request for capture, even when an agent
+  // already started it; an explicit pause stays paused.
+  function openTranscript() { if (media.snapshot().phase === "connected" && media.snapshot().transcription && ["idle", "starting", "transcribing", "reconnecting"].includes(transcript.snapshot().phase)) void transcript.start(); }
   function showPanel(panel: RoomPanel) { roomPanel = panel; chatOpen = true; publish(); if (panel === "transcript") openTranscript(); }
   function setChatOpen(value: boolean) { chatOpen = value; publish(); }
   function setShareSound(value: boolean) { shareSound = value; publish(); }
