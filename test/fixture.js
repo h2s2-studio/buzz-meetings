@@ -142,13 +142,19 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
   const value = Reflect.get(target, property, target);
   return typeof value === "function" ? value.bind(target) : value;
 } }) });
-const { apply } = await import("../plugin.js");
+const { apply, inject } = await import("../plugin.js");
 // Like Buzz, artifact storage cannot open before an identity and community are selected.
 const artifactStorage = { open(definition) { if (!connection.viewer || !connection.origin) throw new Error("Artifact storage needs a plugin, identity and relay"); return host.storage.open(definition); } };
 if (query.has("cold")) connection = { ...connection, status: "connecting", origin: undefined, scope: undefined };
 // Documents use an in-memory store the tests can drive (remote edits as another person).
 const meetingsArtifactStore = memoryArtifactStore(() => connection.viewer, { durable: query.has("durable-documents") });
-apply({ meetingsArtifactStore, react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
+globalThis.meetingsTestArtifactStore = meetingsArtifactStore;
+// Like Buzz, reading a context property the plugin did not inject throws.
+const strict = context => new Proxy(context, { get(target, property, receiver) {
+  if (typeof property === "string" && property !== "effect" && !inject.includes(property)) throw new Error(`cannot get property "${property}" without inject`);
+  return Reflect.get(target, property, receiver);
+} });
+apply(strict({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
@@ -156,7 +162,7 @@ apply({ meetingsArtifactStore, react: React, agents: query.has("no-agent-runtime
   settingsCards: { register(entry) { settings.set(entry.id, entry); } },
   navigation: { async open(target) { navigationTargets.push(target); if (target.kind !== "conversation") navigation?.(target); return { status: "opened" }; } },
   effect(setup) { cleanups.push(setup()); },
-});
+}));
 window.meetingTest = {
   setAgentRunning(value) { runtimeRunning=value; for(const fn of runtimeListeners) fn(); },
   agentWakes: () => agentWakes,
