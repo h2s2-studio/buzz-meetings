@@ -1,4 +1,5 @@
 import { makeLiveAgents, type AgentRuntime } from "./live-agents";
+import { registerRecordSearch } from "./record-search";
 import { makeMeetingTranscription } from "./meeting-transcription";
 import { meetingRecords } from "./meeting-records";
 import { recordsUI } from "./records-ui";
@@ -82,6 +83,7 @@ export function apply(ctx: Context) {
   const transcript = makeMeetingTranscription(media);
   const liveAgents = makeLiveAgents(ctx, media, transcript);
   const records = meetingRecords(ctx.relay,ctx.artifactStorage);
+  registerRecordSearch(ctx, records);
   const Records = recordsUI(React, records, (channelId, messageId) => {
     const live = ctx.relay.snapshot();
     if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });

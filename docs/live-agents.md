@@ -38,6 +38,21 @@ stops transcription. Losing channel/agent access stops the agent without stoppin
 the call’s independent transcript. The listener requires this Buzz
 instance to remain open and connected.
 
+## Context from outside the call
+
+A meeting agent is told to look things up rather than guess. For chat it uses
+Buzz's own search and read tools, which cover every channel the agent is a
+member of. Saved meeting records and their transcripts are artifacts that Buzz
+search does not cover, so the plugin adds `meetings_search_records`: every word
+of the query must appear in one transcript entry, a record title or a task, and
+results carry the speaker-attributed entry, the record and its channel.
+
+An agent only sees records from channels it belongs to. Records are read through
+its owner's connection on this device, so the tool answers only the connected
+owner's own agents, searches the 20 most recent matching records, and reports how
+many it did not search. The Agents view shows which channels a listening agent
+can search. To give it more context, add it to those channels in Buzz.
+
 ## Speech service
 
 The optional Compose `speech` profile runs faster-whisper on CPU, using the
