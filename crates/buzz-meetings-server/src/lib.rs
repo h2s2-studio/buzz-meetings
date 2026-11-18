@@ -621,7 +621,9 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
         }
         Ok(Request::Service) => {
             let workspace = rooms.workspace_access.as_ref();
-            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin())});
+            // Clients poll pre-join presence only when this is advertised: an older broker would
+            // treat a presence request as an admission and mint a join token.
+            let value = serde_json::json!({"type":"service", "workspaceVoice":workspace.is_some(), "identity":workspace.map(|access| access.public_key()), "community":workspace.map(|access| access.origin()), "presence":true});
             let _ = socket.send(Message::Text(value.to_string().into())).await;
             return;
         }
@@ -1127,6 +1129,33 @@ mod tests {
                 {"name":"Sam","sharing":false,"transcribing":true,"agents":[]}
             ])
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn service_reply_advertises_presence_so_clients_can_tell_older_brokers_apart() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as Ws;
+        let service = RoomService::new(
+            Url::parse("ws://127.0.0.1:7880").unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let broker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/rooms", broker.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(broker, router(service)).await.unwrap() });
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        socket
+            .send(Ws::Text(r#"{"type":"service"}"#.into()))
+            .await
+            .unwrap();
+        let Some(Ok(Ws::Text(text))) = socket.next().await else {
+            panic!("no service reply")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "service");
+        assert_eq!(value["presence"], true);
         task.abort();
     }
 }

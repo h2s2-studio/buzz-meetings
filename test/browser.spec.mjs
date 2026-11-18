@@ -401,7 +401,7 @@ async function proxyWorkspaceVoice(page) {
     let server;
     socket.onMessage(raw => {
       const request = JSON.parse(raw);
-      if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin }));
+      if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin, presence: true }));
       if (!server) { server = socket.connectToServer(); server.onMessage(message => socket.send(message)); }
       if (request.type === "workspace" && request.presence) return server.send(JSON.stringify({ type: "presence", community: new URL(request.community).origin + "/", room: `workspace ${request.channel}`.slice(0, 64) }));
       if (request.type === "workspace") {
@@ -499,7 +499,8 @@ test("shows who is in a workspace call before joining, with an audio check and n
     await linkGeneral(page);
     const view = workspace(page);
     await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(view.getByRole("heading", { name: "No one is in the call" })).toBeVisible({ timeout: 15000 });
+    // Before voice is enabled nothing is known, so the Overview does not claim the call is empty.
+    await expect(view.getByRole("heading", { name: "Who’s in the call" })).toBeVisible({ timeout: 15000 });
     await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
     await expect(view.getByRole("group", { name: "Meeting controls" }).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
     await view.getByRole("group", { name: "Meeting controls" }).getByRole("button", { name: "Leave room", exact: true }).click();
@@ -969,6 +970,25 @@ test("activates before a community is selected and binds workspaces and records 
   await page.evaluate(() => meetingTest.selectCommunity());
   await expect(workspaces(page).getByRole("button", { name: "General Voice", exact: true })).toBeVisible();
   expect(failures).toEqual([]);
+});
+test("never asks an older meeting service for presence and says who’s here appears after joining", async ({ page }) => {
+  const serviceIdentity = "e".repeat(64), requests = [];
+  // A service reply without the presence capability, as from a broker before it existed.
+  await page.routeWebSocket(/\/rooms$/, socket => socket.onMessage(raw => {
+    const request = JSON.parse(raw); requests.push(request);
+    if (request.type === "service") socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin }));
+  }));
+  await page.goto(`${fixture}?realm=old-service`);
+  await linkGeneral(page);
+  const view = workspace(page);
+  await view.getByRole("button", { name: "Enable voice & join", exact: true }).waitFor();
+  await page.evaluate(() => meetingTest.workspaceControl({ grant: { id: "10000000-0000-4000-8000-000000000001", viewer: "e".repeat(64), role: "guest" } }));
+  await expect(view.getByRole("status").filter({ hasText: "Who’s here appears after you join." })).toBeVisible();
+  await expect(view.getByRole("heading", { name: "Who’s in the call" })).toBeVisible();
+  await page.waitForTimeout(1500);
+  expect(requests.filter(request => request.presence || request.type === "presence")).toEqual([]);
+  expect(requests.filter(request => request.type === "workspace")).toEqual([]);
+  await expect(view.getByRole("alert")).toHaveCount(0);
 });
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);

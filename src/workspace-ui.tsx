@@ -194,7 +194,7 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     // Overview polls presence while visible and out of the call; in the call the roster is live.
     useEffect(() => {
       setPresence({});
-      if (surface !== "overview" || !access || inCall || !voice?.presence || !channel || !service?.workspaceVoice || service.community !== live.origin || !service.identity || !channel.members?.includes(service.identity)) return;
+      if (surface !== "overview" || !access || inCall || !voice?.presence || !channel || !service?.workspaceVoice || !service.presence || service.community !== live.origin || !service.identity || !channel.members?.includes(service.identity)) return;
       const abort = new AbortController();
       // Each check signs an admission proof: only poll while this window is visible and focused.
       const shown = () => document.visibilityState === "visible" && document.hasFocus();
@@ -203,7 +203,7 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
       poll(); const timer = setInterval(check, 20000);
       addEventListener("focus", check); document.addEventListener("visibilitychange", check);
       return () => { abort.abort(); clearInterval(timer); removeEventListener("focus", check); document.removeEventListener("visibilitychange", check); };
-    }, [surface, access, inCall, channel?.id, service, live.session]);
+    }, [surface, access, inCall, channel?.id, service, live.session, !!service?.identity && !!channel?.members?.includes(service.identity)]);
     useEffect(() => { if (surface !== "overview") return; const timer = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(timer); }, [surface]);
     const enabled = !!service?.workspaceVoice && service.community === live.origin && !!service.identity && !!channel?.members?.includes(service.identity);
     const canEnable = !!live.session.memberAdditions && ["owner","admin"].includes(channel?.viewerRole ?? "");
@@ -235,8 +235,8 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
       const latest = archived?.records.filter(record => record.value.channelId === id)[0];
       return <div className="meeting-overview">
         <div className="meeting-overview-main">
-          <h3 className="text-heading">{inCall ? "You’re in this call" : people.length ? "A call is in progress" : "No one is in the call"}</h3>
-          <p className="text-subtle" role="status">{inCall ? `${people.length} in the call` : presence.value ? `${started ? `Started ${ago(started)} · ` : ""}updated ${ago(presence.value.checkedAt)}` : presence.error ? presence.error : enabled ? "Checking who is here…" : "Turn on voice for this workspace to see who is in the call."}</p>
+          <h3 className="text-heading">{inCall ? "You’re in this call" : people.length ? "A call is in progress" : presence.value ? "No one is in the call" : "Who’s in the call"}</h3>
+          <p className="text-subtle" role="status">{inCall ? `${people.length} in the call` : presence.value ? `${started ? `Started ${ago(started)} · ` : ""}updated ${ago(presence.value.checkedAt)}` : presence.error ? presence.error : enabled && !service?.presence ? "Who’s here appears after you join. This meeting service can’t show it beforehand." : enabled ? "Checking who is here…" : "Turn on voice for this workspace to see who is in the call."}</p>
           {people.length > 0 && <section aria-label="In the call"><h4 className="text-caption text-metadata">In the call</h4><ul className="meeting-overview-people">{people.map((person, index) => <li key={`${person.name}:${index}`}><span className="meeting-avatar" aria-hidden="true">{person.name.slice(0, 1).toLocaleUpperCase()}</span><div><strong>{person.name}</strong><span className="text-caption text-subtle">{person.sharing ? "Sharing their screen" : "In the call"}</span></div></li>)}
             {agents.map(agent => <li key={`agent:${agent.name}`} data-agent=""><span className="meeting-avatar" aria-hidden="true">✦</span><div><strong>{agent.name}</strong> <span className="meeting-agent-badge text-caption">Agent · {agent.owner.replace(" (you)", "")}’s</span><span className="text-caption text-subtle">Listening · {agent.mode === "act" ? "can create and carry out tasks" : "takes notes and proposes tasks"}</span></div></li>)}</ul></section>}
           <section aria-label="Agenda" className="meeting-overview-agenda"><h4 className="text-caption text-metadata">Agenda · from shared notes</h4>{Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p className="text-subtle">Turn on Channels to keep an agenda in shared notes.</p>}</section>
