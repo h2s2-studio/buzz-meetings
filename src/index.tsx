@@ -2,6 +2,8 @@ import { makeLiveAgents, type AgentRuntime } from "./live-agents";
 import { makeMeetingTranscription } from "./meeting-transcription";
 import { meetingRecords } from "./meeting-records";
 import { recordsUI } from "./records-ui";
+import { memoryArtifactStore, recordArtifacts, type ArtifactStore } from "./artifact-store";
+import { documentsUI, type OpenTarget } from "./documents-ui";
 import { transcriptUI } from "./transcript-ui";
 import type * as ReactRuntime from "react";
 import { makeRoomSession, type RoomSnapshot } from "./room";
@@ -82,13 +84,25 @@ export function apply(ctx: Context) {
   const transcript = makeMeetingTranscription(media);
   const liveAgents = makeLiveAgents(ctx, media, transcript);
   const records = meetingRecords(ctx.relay,ctx.artifactStorage);
+  // Documents and boards. Until the native adapter lands (after Gate 0), revisions live
+  // in memory only; tests may supply their own store.
+  const artifactStore: ArtifactStore = (ctx as unknown as { meetingsArtifactStore?: ArtifactStore }).meetingsArtifactStore ?? memoryArtifactStore(() => ctx.relay.snapshot().viewer);
+  const personName = (pubkey: string) => ctx.relay.snapshot().session.profiles.snapshot().get(pubkey)?.name || ctx.agents?.snapshot().agents.find(agent => agent.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
+  const documents = documentsUI(React, { store: artifactStore, actor: () => ctx.relay.snapshot().viewer, name: personName,
+    occurrence: channelId => media.snapshot().workspaceChannelId === channelId && media.snapshot().phase !== "idle" ? media.snapshot().occurrenceId : undefined });
+  // The document open in the workspace tab or the Edit together pane, shared by both.
+  let documentTarget: OpenTarget | undefined, editing = false;
+  function setDocument(target?: OpenTarget) { documentTarget = target; publish(); }
+  function openDocument(target: OpenTarget) { setDocument(target); workspaces.open(target.channelId, "documents"); }
+  const artifactsFor = (channelId: string, occurrenceId?: string) => recordArtifacts(artifactStore, channelId, occurrenceId);
   const Records = recordsUI(React, records, (channelId, messageId) => {
     const live = ctx.relay.snapshot();
     if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });
-  });
-  const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
+  }, openDocument);
+  const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel, artifacts: { artifactsFor } });
+  function WorkspaceDocuments({ channelId }: { channelId: string }) { useUI(); return <documents.DocumentsTab channelId={channelId} target={documentTarget} setTarget={setDocument} />; }
   ctx.effect(() => () => { transcript.close(); records.close(); });
-  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records,
+  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, Documents: WorkspaceDocuments, documentsPreview: !artifactStore.durable, transcript, records,
     temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() },
     presence: workspacePresence, AudioCheck: () => <audio.AudioSettings inline /> });
   const listeners = new Set<() => void>();
@@ -109,14 +123,14 @@ export function apply(ctx: Context) {
   type RoomPanel = "chat" | "agents" | "transcript";
   let roomPanel: RoomPanel = "chat";
   let preset: Preset = "balanced";
-  let ui = { rooms, selected, broker, accessKey, visible, stageChoice, stageNotice, chatOpen, shareSound, roomPanel: roomPanel as RoomPanel, preset: preset as Preset, error: "" };
+  let ui = { rooms, selected, broker, accessKey, visible, stageChoice, stageNotice, documentTarget: undefined as OpenTarget | undefined, editing: false, chatOpen, shareSound, roomPanel: roomPanel as RoomPanel, preset: preset as Preset, error: "" };
   const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
   function loadPresentation() {
     try { const saved = JSON.parse(localStorage.getItem(`meetings-view:${connection.scope}:${connection.viewer}`) ?? "{}"); chatOpen = saved.chatOpen !== false; roomPanel = ["chat","agents","transcript"].includes(saved.roomPanel) ? saved.roomPanel : "chat"; preset = saved.preset === "sharp" ? "sharp" : "balanced"; shareSound = saved.shareSound === true; } catch { /* Use this session's defaults. */ }
   }
   loadPresentation();
   function publish(error = "") {
-    ui = { rooms, selected, broker, accessKey, visible, stageChoice, stageNotice, chatOpen, shareSound, roomPanel, preset, error };
+    ui = { rooms, selected, broker, accessKey, visible, stageChoice, stageNotice, documentTarget, editing, chatOpen, shareSound, roomPanel, preset, error };
     try { localStorage.setItem(`meetings-view:${connection.scope}:${connection.viewer}`,JSON.stringify({ chatOpen,roomPanel,preset,shareSound })); } catch { /* The current view remains usable. */ }
     for (const listener of listeners) listener();
   }
@@ -141,7 +155,7 @@ export function apply(ctx: Context) {
   // ends: fall back to the next share, then to everyone, and say why.
   ctx.effect(() => media.subscribe(() => {
     const call = media.snapshot();
-    if (call.phase === "idle") { if (stageChoice !== "participants" || stageNotice) { stageChoice = "participants"; stageNotice = ""; queueMicrotask(() => publish()); } return; }
+    if (call.phase === "idle") { if (stageChoice !== "participants" || stageNotice || editing) { stageChoice = "participants"; stageNotice = ""; editing = false; queueMicrotask(() => publish()); } return; }
     const gone = stageChoice === "your-screen" ? !call.sharing
       : stageChoice.startsWith("screen:") ? !call.streams.some(stream => stream.id === stageChoice.slice(7))
       : stageChoice.startsWith("person:") ? !call.participants.some(person => person.id === stageChoice.slice(7))
@@ -383,8 +397,8 @@ export function apply(ctx: Context) {
         <LabeledControl text="Camera" aria-label={cameraLabel} icon={call.camera ? "camera" : "cameraOff"} aria-pressed={call.camera} disabled={busy || call.phase !== "connected" || call.cameraPhase === "publishing"} onClick={toggleCamera} />
         <SharingControl call={call} labeled />
         <LabeledControl text="Agent" aria-label="Agent" icon="agent" aria-pressed={panelOpen("agents")} onClick={() => togglePanel(call, "agents")} />
-        <LabeledControl text="Edit together" aria-label="Edit together" icon="edit" disabled aria-describedby={editHint} />
-        <span id={editHint} className="sr-only">Available when an agent shares a document or board.</span>
+        <LabeledControl text="Edit together" aria-label="Edit together" icon="edit" disabled={!call.workspaceChannelId} aria-pressed={!!call.workspaceChannelId && state.editing} aria-describedby={call.workspaceChannelId ? undefined : editHint} onClick={() => { editing = !editing; publish(); }} />
+        {!call.workspaceChannelId && <span id={editHint} className="sr-only">Available in a shared meeting.</span>}
         <LabeledControl text="Transcript" aria-label="Transcript" icon="transcript" aria-pressed={panelOpen("transcript")} onClick={() => togglePanel(call, "transcript")} />
         <LabeledControl text="Leave" aria-label="Leave room" icon="leave" danger onClick={() => media.leave()} />
       </div>
@@ -558,7 +572,8 @@ export function apply(ctx: Context) {
     </section>;
   }
   function WorkspaceRoster() { const call = useCall(); return <Roster call={call} />; }
-  function WorkspaceCall() { return <MeetingBody panels={false} />; }
+  // One flex column so the stage (and the Edit together pane) take the height, not the footer.
+  function WorkspaceCall() { return <div className="meeting-workspace-call"><MeetingBody panels={false} /></div>; }
   const railTabs: { id: RoomPanel; label: string }[] = [{ id: "chat", label: "Chat" }, { id: "transcript", label: "Transcript" }, { id: "agents", label: "Agent" }];
   function Rail({ room, close }: { room: string; close(): void }) {
     const state = useUI(), tabs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -605,13 +620,15 @@ export function apply(ctx: Context) {
     const localScreen = stageChoice === "your-screen" && call.sharing, remoteScreen = stageChoice.startsWith("screen:") && call.video;
     const allScreens = stageChoice === "all-screens" && call.screens.length > 0;
     const focused = !!(localScreen || person || remoteScreen || allScreens);
+    // Edit together: the document pane sits beside the stage, which stays live.
+    const editPane = state.editing && !!call.workspaceChannelId && call.phase !== "idle";
     const room = call.roomName || state.selected;
     const fullscreen = <Button label="Full screen" icon="expand" variant="ghost" onClick={() => { void stage.current?.requestFullscreen?.().catch(() => setFullscreenError("Full screen isn’t available in this window.")); }} />;
     return <>{/* The stage and controls share ownership across all meeting views. */}
       <TranscriptionNotice call={call} />
       {call.cameraDenied && connected && <CameraAccess />}
       {connected && call.audioBlocked && <div className="meeting-recovery"><Button label="Enable audio playback" onClick={() => { void media.resumeAudio(); }} /></div>}
-      <div className="meeting-body" data-chat-open={(chatOpen && !!room) || undefined}><div className="meeting-content">
+      <div className="meeting-body" data-chat-open={(chatOpen && !!room) || editPane || undefined}><div className="meeting-content">
         {state.stageNotice && <p className="meeting-stage-notice text-caption" role="status">{state.stageNotice}</p>}
         <div className="meeting-stage" ref={stage} data-focused={focused || undefined}>
           {localScreen ? <div className="meeting-focused-screen"><Video stream={localScreen.preview} label="Your screen on stage" /><div className="meeting-focused-caption"><span className="text-body-sm">Your screen</span><div className="meeting-view-actions">{fullscreen}<Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
@@ -622,7 +639,8 @@ export function apply(ctx: Context) {
           {fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}
         </div>
         {call.phase !== "idle" && (focused || call.streams.length > 0 || !!call.sharing) && <Filmstrip call={call} people={focused} />}
-      </div>{chatOpen && !!room && <Rail room={room} close={closePanel ?? (() => setChatOpen(false))} />}</div>
+      </div>{editPane ? <aside className="meeting-rail meeting-editor-pane" aria-label="Edit together"><documents.DocumentsTab channelId={call.workspaceChannelId!} target={state.documentTarget} setTarget={setDocument} /></aside>
+        : chatOpen && !!room && <Rail room={room} close={closePanel ?? (() => setChatOpen(false))} />}</div>
       {call.phase !== "idle" && <footer className="meeting-footer"><div className="meeting-footer-status text-caption"><span className="meeting-status-dot" data-connected={call.phase === "connected" || undefined} /><span>{call.phase === "connected" ? "Connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}{call.transcriptActive ? " · Transcript on" : ""}</span></div><Controls call={call} /></footer>}
     </>;
   }
