@@ -1127,7 +1127,7 @@ test("builds a board by pointer and keyboard, then turns selected cards into a l
   await page.goto(`${fixture}?realm=board`);
   await linkGeneral(page);
   const view = workspace(page);
-  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ }).click();
+  await library(view, /^Documents & boards/);
   await view.getByRole("button", { name: "New board", exact: true }).click();
   const board = view.getByRole("region", { name: /^Board: / });
   const toolbar = board.getByRole("toolbar", { name: "Board" });
