@@ -11,26 +11,27 @@ export type TileAgent = {
 
 // In a call people talk and watch: an agent's question is answered on its tile, by
 // clicking (its owner, on the device that runs it) or by saying an option (anyone).
-export function agentQuestionUI(React: typeof ReactRuntime, liveAgents?: LiveAgents) {
-  const { useEffect, useState } = React;
+export function agentQuestionUI(React: typeof ReactRuntime, liveAgents?: LiveAgents, /** This client's media identity, to recognise the owner's own speech. */ self?: () => string | undefined) {
+  const { useEffect, useId, useState } = React;
   function useNow(active: boolean) {
     const [now, setNow] = useState(Date.now());
     useEffect(() => { if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [active]);
     return now;
   }
   function AgentQuestion({ agent, compact = false }: { agent: TileAgent; compact?: boolean }) {
-    const question = agent.question, now = useNow(!!question);
+    const question = agent.question, now = useNow(!!question), id = useId();
     if (!question) return null;
     const left = Math.max(0, Math.ceil((question.expiresAt - now) / 1000));
     const heard = agent.suggestions?.at(-1);
     return <div className="meeting-agent-question" role="group" aria-label={`${agent.name} asks`} data-compact={compact || undefined}>
-      <p className="meeting-agent-question-text">{question.text}</p>
+      <p className="meeting-agent-question-text" id={id}>{question.text}</p>
       <div className="meeting-agent-question-options">{question.options.map(option => agent.local
-        ? <button key={option} type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant={option === question.options[0] ? "prominent" : "subtle"} onClick={() => liveAgents?.answer(agent.pubkey, question.key, option)}>{option}</button>
+        ? <button key={option} type="button" aria-describedby={id} className="buzz-button" data-buzz-ui="" data-size="sm" data-variant={option === question.options[0] ? "prominent" : "subtle"} onClick={() => liveAgents?.answer(agent.pubkey, question.key, option)}>{option}</button>
         : <span key={option} className="meeting-agent-question-option">{option}</span>)}</div>
-      <p className="meeting-agent-question-meta text-caption" role="status">
-        {heard ? `Heard “${heard.heard}” from ${heard.byName}. ${agent.name} decides. ` : agent.local ? "Click or say an option. " : "Say an option to answer. "}
-        {left > 0 ? `Closes in ${left} s.` : "Closing…"}
+      {/* Announced only when something is heard; the countdown is not a live region. */}
+      <p className="meeting-agent-question-meta text-caption">
+        <span role="status">{heard ? `Heard “${heard.heard}” from ${heard.byName}. ${agent.local && heard.by === self?.() ? "Click to confirm." : `${agent.name} decides.`} ` : agent.local ? "Click or say an option. " : "Say an option to answer. "}</span>
+        <span aria-hidden="true">{left > 0 ? `Closes in ${left} s.` : "Closing…"}</span>
       </p>
     </div>;
   }

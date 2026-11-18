@@ -17,10 +17,11 @@ export type AgentRuntime = {
 type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string; author?: { pubkey: string; name: string } };
 /** An answer to an agent's in-call question. Only the owner's click is the owner's answer; others are suggestions. */
 export type Answer = { key: string; option: string; by: string; byName: string; owner: boolean; via: "click" | "speech"; at: number; heard?: string; recorded?: boolean };
-export type Question = { key: string; text: string; options: string[]; askedAt: number; expiresAt: number; status: "open" | "answered" | "expired" | "replaced"; answer?: Answer; messageId?: string };
+export type Question = { key: string; text: string; options: string[]; askedAt: number; expiresAt: number; status: "open" | "answered" | "expired" | "replaced"; answer?: Answer; messageId?: string; heardRecorded?: number; speechWokeAt?: number; speechWake?: ReturnType<typeof setTimeout> };
+const speechLimit = 6, speechWakeMs = 5000;
 /** What the agent's tile says: from its open question and latest task. */
 export type AgentStatus = { state: "listening" | "working" | "needs-input" | "finished"; caption: string; messageId?: string };
-type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; joinId: string; occurrenceId?: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; question?: Question; answers: Answer[]; lastTask?: string; expiry?: ReturnType<typeof setTimeout>; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
+type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; joinId: string; occurrenceId?: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; question?: Question; replaced?: Question; answers: Answer[]; lastTask?: string; expiry?: ReturnType<typeof setTimeout>; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
 export type CallAgent = { pubkey: string; name: string; channelId: string; sessionId: string; phase: "starting" | "listening"; status: AgentStatus; question?: Question; suggestions: readonly Answer[] };
 export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; occurrenceId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
 export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; effect(setup: () => () => void): void }, media: ReturnType<typeof makeRoomSession>, transcript: MeetingTranscription) {
@@ -59,7 +60,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
   function stop(error = "", pubkey?: string) {
     for (const run of [...active.values()]) {
       if (pubkey && run.agent.pubkey !== pubkey) continue;
-      run.stopped = true; run.abort.abort(); clearInterval(run.timer); clearTimeout(run.expiry); run.stopActivity?.(); run.stopAccess?.();
+      run.stopped = true; run.abort.abort(); clearInterval(run.timer); clearTimeout(run.expiry); clearTimeout(run.question?.speechWake); run.stopActivity?.(); run.stopAccess?.();
       active.delete(run.agent.pubkey); released.push(run);
     }
     // Release only this agent's capture interest; independently requested transcription continues.
@@ -86,13 +87,22 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     try { ctx.agents.wake(run.agent.key, { channel: run.channelId, root: run.root, text: `${reason} Call meetings_live_context with session_id ${run.id} for the answer. Only the owner's click is the owner's answer; speech and other people's clicks are suggestions with unverified speaker labels.` }); run.lastWakeAt = Date.now(); }
     catch { /* The tile still shows the answer; the agent reads it on its next wake. */ }
   }
+  // Spoken suggestions wake the agent at most once per 5 s per question; later ones are coalesced.
+  function speechWake(run: Session, question: Question) {
+    if (question.speechWake) return;
+    const wait = question.speechWokeAt === undefined ? 0 : Math.max(0, question.speechWokeAt + speechWakeMs - Date.now());
+    question.speechWake = setTimeout(() => {
+      question.speechWake = undefined; question.speechWokeAt = Date.now();
+      if (question.status === "open") wakeFor(run, `Someone in the call may have answered your question "${question.text}" by speech.`);
+    }, wait);
+  }
   /** The person at this device answers an agent's open question by clicking an option. */
   function answer(pubkey: string, key: string, option: string) {
     const run = active.get(pubkey), question = run?.question, viewer = ctx.relay.snapshot().viewer;
     if (!run || !question || question.status !== "open" || question.key !== key || !question.options.includes(option) || !viewer) return;
     const value: Answer = { key, option, by: viewer, byName: "", owner: viewer === run.agent.owner, via: "click", at: Date.now() };
     run.answers.push(value); run.answers.splice(0, Math.max(0, run.answers.length - 64));
-    if (value.owner) { question.status = "answered"; question.answer = value; clearTimeout(run.expiry); }
+    if (value.owner) { question.status = "answered"; question.answer = value; clearTimeout(run.expiry); clearTimeout(question.speechWake); }
     emit();
     wakeFor(run, `${value.owner ? "Your owner answered" : "Someone suggested an answer to"} your question "${question.text}".`);
   }
@@ -184,7 +194,13 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
         const question = run.question;
         if (question?.status === "open") for (const segment of segments) {
           const option = spokenOption(segment.text, question.options);
-          if (option && run.answers.length < 64) { run.answers.push({ key: question.key, option, by: segment.speakerId, byName: segment.speakerName, owner: false, via: "speech", at: Date.now(), heard: segment.text.slice(0, 200) }); wakeFor(run, `Someone in the call may have answered your question "${question.text}" by speech.`); }
+          if (!option) continue;
+          // Bounded: one suggestion per speaker per option per question, at most six per question.
+          const heard = run.answers.filter(answer => answer.key === question.key && answer.via === "speech");
+          if (heard.length >= speechLimit || heard.some(answer => answer.by === segment.speakerId && answer.option === option)) continue;
+          run.answers.push({ key: question.key, option, by: segment.speakerId, byName: segment.speakerName, owner: false, via: "speech", at: Date.now(), heard: segment.text.slice(0, 200), recorded: true });
+          run.answers.splice(0, Math.max(0, run.answers.length - 64));
+          speechWake(run, question);
         }
         if (segments.length) { run.transcripts.push(...segments); if (run.transcripts.length > 4000) { const removed=run.transcripts.length-4000; run.transcripts.splice(0,removed); run.base+=removed; } emit(); notify(run); }
       }
@@ -205,7 +221,14 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     // Answers become part of the thread record once the agent has received them.
     for (const answer of run.answers.filter(item => !item.recorded)) {
       answer.recorded = true;
-      void client.publish({ kind: 9, created_at: Math.floor(Date.now()/1000), tags: [["h",run.channelId], ["e",run.root!,"","reply"]], content: answer.via === "click" ? `Answer · ${answer.option}${answer.owner ? "" : " (suggested by a participant)"}` : `Heard · "${answer.heard}" → ${answer.option} (speech from ${answer.byName}, unverified)` }).catch(() => { answer.recorded = false; });
+      void client.publish({ kind: 9, created_at: Math.floor(Date.now()/1000), tags: [["h",run.channelId], ["e",run.root!,"","reply"]], content: `Answer · ${answer.option}${answer.owner ? "" : " (suggested by a participant)"}` }).catch(() => { answer.recorded = false; });
+    }
+    // Speech is summarised once per question, after it closes, not posted per utterance.
+    for (const question of [run.replaced, run.question].filter((item): item is Question => !!item && item.status !== "open")) {
+      const heard = run.answers.filter(answer => answer.key === question.key && answer.via === "speech");
+      if (!heard.length || question.heardRecorded === heard.length) continue;
+      const count = heard.length; question.heardRecorded = count;
+      void client.publish({ kind: 9, created_at: Math.floor(Date.now()/1000), tags: [["h",run.channelId], ["e",run.root!,"","reply"]], content: `Heard while asking "${question.text}" (speech, unverified): ${heard.map(answer => `${answer.byName} → ${answer.option}`).join("; ")}` }).catch(() => { question.heardRecorded = undefined; });
     }
     return JSON.stringify({ question: run.question ? { key: run.question.key, text: run.question.text, options: run.question.options, status: run.question.status, expiresAt: run.question.expiresAt, ...(run.question.answer ? { answer: run.question.answer } : {}) } : undefined,
       answers: run.answers.slice(-16).map(({ recorded: _recorded, ...answer }) => answer),
@@ -235,7 +258,8 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     if (typeof key !== "string" || !/^[a-z0-9_-]{1,64}$/.test(key) || typeof question !== "string" || !question.trim() || question.length > 200 || labels.length < 2 || labels.length > 4 || labels.some(label => label.length > 40) || new Set(labels.map(label => label.toLocaleLowerCase())).size !== labels.length) throw new Error("Ask one question of up to 200 characters with 2–4 distinct options of up to 40 characters.");
     if (run.stopped) throw new Error("You are no longer listening in this call.");
     const seconds = Number.isSafeInteger(args.timeout_seconds) ? Math.min(600, Math.max(15, Number(args.timeout_seconds))) : 120, now = Date.now();
-    if (run.question?.status === "open") run.question.status = "replaced";
+    if (run.question?.status === "open") { run.question.status = "replaced"; clearTimeout(run.question.speechWake); }
+    if (run.question) run.replaced = run.question;
     clearTimeout(run.expiry);
     const asked: Question = { key, text: question.trim(), options: labels, askedAt: now, expiresAt: now + seconds * 1000, status: "open" };
     run.question = asked;

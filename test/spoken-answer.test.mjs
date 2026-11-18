@@ -19,3 +19,10 @@ test("an option's own words match; ambiguous or long remarks do not", () => {
   assert.equal(spokenOption("visibility and track layout", ["Visibility", "Track layout"]), undefined, "two options named");
   assert.equal(spokenOption("", options), undefined);
 });
+
+test("generic yes/no needs a short reply with nothing else in it", () => {
+  const options = ["Yes, draft it", "Not yet"];
+  assert.equal(spokenOption("ok so where were we", options), undefined);
+  assert.equal(spokenOption("sure, but what about the budget", options), undefined);
+  assert.equal(spokenOption("yeah go ahead", options), "Yes, draft it");
+});

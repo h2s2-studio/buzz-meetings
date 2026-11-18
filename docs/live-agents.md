@@ -137,3 +137,14 @@ People in a call talk and watch. Chat is the record, never a required step.
   assignment thread as the record.
 - **Not yet supported:** remote clicks. They need a data-channel grant from the
   meeting service.
+
+### `meetings_ask`
+
+`meetings_ask { session_id, key, question (≤ 200), options (2–4, ≤ 40 each), timeout_seconds (15–600, default 120) }`
+
+- **Who can answer:** the agent's owner, by clicking on the device that runs the agent. That click is the only answer that settles the question as the owner's.
+- **Speech:** anyone may answer by speaking. A spoken match is a suggestion (`via: "speech", owner: false`), including the owner's own speech, because speaker labels are not verified. The tile then asks the owner to click to confirm.
+- **Spoken matching:** generic yes/no replies must be four words or fewer with nothing else in them. A reply naming an option's own words may be up to eight words.
+- **Bounds:** at most one suggestion per speaker per option and six per question. Speech wakes the agent at most once per 5 s. The thread gets one "Heard while asking …" summary per question.
+- **What speech can settle:** only a question the agent asked, within its existing role. It never grants new permission.
+- **Remote clicks:** other participants can't click to answer yet; that needs a data-channel grant from the meeting service.

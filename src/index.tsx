@@ -292,7 +292,7 @@ export function apply(ctx: Context) {
       ...call.participants.filter(person=>!person.local).flatMap(person=>(person.listeners ?? []).map(agent=>({ key:`${person.id}:${agent.pubkey}`, pubkey:agent.pubkey, name:agent.name, phase:"listening" as const, local:false, status: agent.state ? { state:agent.state, caption:agent.caption ?? "" } : undefined, question:agent.question })))];
     return [...new Map(people.map(agent=>[agent.pubkey,agent])).values()];
   }
-  const { AgentQuestion, AgentStatusLine } = agentQuestionUI(React, liveAgents);
+  const { AgentQuestion, AgentStatusLine } = agentQuestionUI(React, liveAgents, () => media.snapshot().participants.find(person => person.local)?.id);
   const stateLabel = (agent: { phase: string; status?: TileAgent["status"] }) => agent.phase === "starting" ? "Joining" : ({ listening: "Listening", working: "Working", "needs-input": "Needs input", finished: "Finished" } as const)[agent.status?.state ?? "listening"];
   /** Results open inside the call (its chat), never by leaving the Meetings page. */
   function openResult(channelId: string, messageId: string) {
