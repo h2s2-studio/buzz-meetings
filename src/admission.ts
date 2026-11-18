@@ -1,4 +1,4 @@
-import { inviteFromParams, socketUrl, roomServiceError, type RoomAdmission, type RoomRequest } from "./protocol";
+import { inviteFromParams, socketUrl, roomServiceError, validOccurrence, type RoomAdmission, type RoomRequest } from "./protocol";
 
 import type { AdmissionProof } from "./workspace-voice";
 
@@ -39,6 +39,7 @@ export function requestRoom(broker: string, request: RoomRequest, signal: AbortS
         )) return finish();
         finish({
           type: "admitted", room: typeof reply.room === "string" ? reply.room : undefined,
+          occurrenceId: validOccurrence(reply.occurrenceId) ? reply.occurrenceId : undefined,
           url: socketUrl(reply.url, false),
           token: reply.token,
           capabilities: { screenAudio: reply.capabilities?.screenAudio === true, transcription: reply.capabilities?.transcription === true, sharedTranscription: reply.capabilities?.sharedTranscription === true },

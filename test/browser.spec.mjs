@@ -385,6 +385,140 @@ test("joins voice in one click, hears peers, mutes, watches simultaneous screens
   await expect(page.locator("audio[data-meeting-audio]")).toHaveCount(0);
 });
 
+// Workspace admission needs a relay-backed broker identity. Forward the client's
+// workspace requests as trusted-proxy meeting requests to the real broker, so the
+// SFU, speech worker and plugin run for real while channel verification is a fixture.
+async function proxyWorkspaceVoice(page) {
+  const serviceIdentity = "e".repeat(64);
+  await page.routeWebSocket(/\/rooms$/, socket => {
+    let server;
+    socket.onMessage(raw => {
+      const request = JSON.parse(raw);
+      if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin }));
+      if (!server) { server = socket.connectToServer(); server.onMessage(message => socket.send(message)); }
+      if (request.type === "workspace") {
+        const { name, community, channel, picture, captions } = request;
+        return server.send(JSON.stringify({ type: captions ? "captions" : "meeting", name, community: new URL(community).origin + "/", room: `workspace ${channel}`.slice(0, 64), ...(picture ? { picture } : {}) }));
+      }
+      server.send(raw);
+    });
+  });
+}
+test("keeps a workspace transcript recoverable after leaving and rejoining, and only treats it as saved when a record covers it", async ({ page }, info) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for the ended-call transcript");
+  test.setTimeout(180000);
+  await proxyWorkspaceVoice(page);
+  await page.goto(`${fixture}?realm=ended-${info.project.name}&speech&viewer=Alex`);
+  await linkGeneral(page);
+  const view = workspace(page), tabs = view.getByRole("group", { name: "Workspace views" }), callbar = view.getByRole("group", { name: "Meeting controls" });
+  await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  await tabs.getByRole("button", { name: "Transcript", exact: true }).click();
+  const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
+  const entries = panel.getByRole("region", { name: "Transcript entries" }).getByRole("listitem");
+  await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(0);
+  // Save mid-call, then keep talking: the later speech is not covered by that save.
+  await panel.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(panel).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
+  const savedCount = await entries.count();
+  await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(savedCount);
+  await expect(panel).not.toContainText("Saved in this workspace’s Meeting records.");
+  // Leave while viewing the transcript.
+  await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
+  const ended = view.getByRole("group", { name: "Ended call" });
+  await expect(ended.getByRole("status")).toHaveText("The call ended. Its transcript isn’t saved yet.");
+  const spoken = await entries.count();
+  expect(spoken).toBeGreaterThan(savedCount);
+  // Rename the workspace meanwhile: the record must still bind to the original channel.
+  await page.getByRole("button", { name: "Workspace settings", exact: true }).click();
+  await page.getByRole("button", { name: "Rename workspace General Voice", exact: true }).click();
+  await page.getByLabel("New workspace name").fill("Playtest review");
+  await page.getByRole("button", { name: "Save workspace name", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  await workspaces(page).getByRole("button", { name: "Playtest review", exact: true }).click();
+  // Rejoining keeps the earlier transcript.
+  await view.getByRole("button", { name: "Join voice", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  await expect(ended.getByRole("status")).toHaveText("An earlier call’s transcript isn’t saved yet.");
+  await ended.getByRole("button", { name: "Review and save", exact: true }).click();
+  await expect(entries).toHaveCount(spoken);
+  await panel.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(ended.getByRole("status")).toHaveText("An earlier call’s transcript is saved in Meeting records.", { timeout: 15000 });
+  const evidence = await page.evaluate(() => meetingTest.workspaceControl({}));
+  const saved = evidence.events.filter(event => event.tags.some(tag => tag[0] === "type" && tag[1] === "studio.h2s2.meetings.record")).map(event => ({ tags: event.tags, value: JSON.parse(event.content) }));
+  expect(saved).toHaveLength(2);
+  for (const record of saved) { expect(record.tags).toContainEqual(["h", general]); expect(record.value.callId).toMatch(/^RM_/); }
+  expect(saved.map(record => record.value.covers.count).sort((a, b) => a - b)).toEqual([savedCount, spoken]);
+  await tabs.getByRole("button", { name: "Meeting records", exact: true }).click();
+  await expect(view.getByRole("region", { name: "Saved meeting records" }).getByRole("button")).toHaveCount(2);
+  await ended.getByRole("button", { name: "Close transcript", exact: true }).click();
+  await expect(ended).toHaveCount(0);
+  await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
+});
+test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
+  test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
+  await proxyWorkspaceVoice(page);
+  await page.goto(`${fixture}?realm=same-name-${info.project.name}&viewer=Alex`);
+  await linkGeneral(page);
+  const view = workspace(page), callbar = view.getByRole("group", { name: "Meeting controls" });
+  await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  const quick = sidebar(page).getByRole("button", { name: "Join General Voice", exact: true });
+  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toBeVisible();
+  await expect(quick).not.toHaveAttribute("aria-current", "true");
+  await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  // Return from Messages lands on the workspace call, not the same-name quick room.
+  await page.getByRole("button", { name: "Messages", exact: true }).click();
+  await page.getByRole("toolbar", { name: "Buzz toolbar" }).getByRole("button", { name: "General Voice", exact: true }).click();
+  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Voice", exact: true })).toHaveAttribute("aria-pressed", "true");
+  // Renaming the quick shortcut never leaves the workspace call.
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("Lounge");
+  await expect(page.getByRole("button", { name: "Save channel name", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  await workspaces(page).getByRole("button", { name: "General Voice", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Lounge", exact: true }).click();
+  await page.getByLabel("New channel name", { exact: true }).fill("General Voice");
+  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByRole("button", { name: "Meetings", exact: true }).click();
+  // Selecting the quick room joins it instead of reusing the workspace connection.
+  const occurrence = await view.getByRole("group", { name: "Meeting controls" }).getAttribute("data-occurrence");
+  await quick.click();
+  await expect(controls(page).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  await expect(quick).toHaveAttribute("aria-current", "true");
+  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  await expect(controls(page)).not.toHaveAttribute("data-occurrence", occurrence);
+});
+test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }, info) => {
+  test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
+  const other = await context.newPage();
+  await Promise.all([page.goto(`${fixture}?viewer=Alex`), other.goto(`${fixture}?viewer=Riley`)]);
+  // A room of its own: a page closed mid-call elsewhere keeps a shared room alive until LiveKit times it out.
+  const roomName = `Occurrence ${info.project.name} ${Date.now() % 100000}`;
+  for (const client of [page, other]) {
+    await client.getByRole("button", { name: "Add voice channel", exact: true }).click();
+    await client.getByLabel("Room name", { exact: true }).fill(roomName);
+    await client.getByRole("button", { name: "Add room", exact: true }).click();
+  }
+  const room = client => sidebar(client).getByRole("button", { name: `Join ${roomName}`, exact: true });
+  const occurrence = async client => { await expect(controls(client)).toHaveAttribute("data-occurrence", /^RM_[A-Za-z0-9]+$/, { timeout: 15000 }); return controls(client).getAttribute("data-occurrence"); };
+  const connect = async client => { await room(client).click(); await expect(controls(client).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 }); return occurrence(client); };
+  const leave = async client => { await controls(client).getByRole("button", { name: "Leave room", exact: true }).click(); await expect(room(client)).toBeVisible(); };
+  const first = await connect(page);
+  expect(await connect(other)).toBe(first);
+  await leave(other);
+  expect(await connect(other)).toBe(first);
+  await leave(page); await leave(other);
+  // LiveKit keeps an emptied room for its 20 s departure timeout, then closes it.
+  await page.waitForTimeout(25000);
+  const next = await connect(page);
+  expect(next).not.toBe(first);
+  expect(await connect(other)).toBe(next);
+});
 test("keeps icon controls reachable and sharing choices explicit across pane sizes and navigation", async ({ page }) => {
   test.skip(!upstream, "Run npm run test:media to exercise call controls");
   await page.goto(`${fixture}?realm=ux-drawer`); await join(page).click();
@@ -493,6 +627,8 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   expect(messages.at(-1)).toMatchObject({ viewer: "b".repeat(64) });
   expect(messages.at(-1).text).toContain("Research summary");
   if (test.info().project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-live-agent.png" });
+  // This person opened Transcript first, so removing the agent leaves transcription running.
+  await expect(panel).not.toContainText("also stops transcription");
   await panel.getByRole("button", { name: "Remove Research helper from call", exact: true }).click();
   await expect(stage(other).getByRole("status").filter({ hasText: "agent listening" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Remove Research helper from call", exact: true })).toHaveCount(0);
@@ -515,6 +651,50 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   await controls(other).getByRole("button", { name: "Leave room", exact: true }).click();
 });
 
+test("completes a task after the agent stops listening and opens its result from the saved record", async ({ page }, info) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable the local speech service for the real transcription workflow");
+  test.setTimeout(120000);
+  await page.goto(`${fixture}?realm=results-${info.project.name}&agents&speech&viewer=Alex`);
+  await join(page).click();
+  await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
+  await page.getByRole("button", { name: "Meeting agents", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Meeting agents", exact: true });
+  await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks", { timeout: 15000 });
+  await expect.poll(() => page.evaluate(() => meetingTest.agentWakes().length), { timeout: 45000 }).toBeGreaterThan(0);
+  const session_id = (await page.evaluate(() => meetingTest.agentWakes()))[0].text.match(/session_id ([0-9a-f-]{36})/)[1];
+  const task = { session_id, key: "playtest-brief", title: "Draft the playtest brief", status: "working" };
+  await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), task);
+  await expect(panel).toContainText("Research helper · Working · Saved in chat");
+  // Only the agent asked for capture, so Remove says it also stops transcription.
+  const remove = panel.getByRole("button", { name: "Remove Research helper from call and stop transcription", exact: true });
+  await expect(remove).toHaveText("Remove and stop transcription");
+  await expect(remove).toHaveAccessibleDescription("Removing it also stops transcription here. Open Transcript first to keep it running.");
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+  await expect(controls(page).getByRole("button", { name: "Pause transcription", exact: true })).toHaveCount(0);
+  // The agent finishes after listening stopped; the meeting reflects it.
+  await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), { ...task, status: "done", result: "Brief posted in the thread." });
+  await expect(panel).toContainText("Research helper · Done · Saved in chat");
+  const result = (await page.evaluate(() => meetingTest.workspaceState())).messages[general].at(-1);
+  expect(result.text).toContain("Brief posted");
+  await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
+  await page.getByRole("button", { name: "Show transcript", exact: true }).click();
+  const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
+  await transcript.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
+  await page.getByRole("button", { name: "Show room chat", exact: true }).click();
+  await linkGeneral(page);
+  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
+  await records.getByRole("button", { name: /General Voice/ }).click();
+  const results = records.getByRole("list", { name: "Meeting results" });
+  await expect(results.getByRole("listitem")).toHaveText(/Draft the playtest brief · Done · Research helper — Brief posted in the thread\./);
+  await results.getByRole("button", { name: "Open result in thread", exact: true }).click();
+  const target = (await page.evaluate(() => meetingTest.navigationTargets())).at(-1);
+  expect(target).toMatchObject({ kind: "conversation", channelId: general });
+  expect(target.messageId).toMatch(/^[0-9a-f]{64}$/);
+});
 test("transcribes a room without an agent or linked channel and preserves text across navigation, pause and leave", async ({ page, context }) => {
   test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for independent transcripts");
   test.setTimeout(90000);
@@ -569,7 +749,8 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Transcribing");
   await panel.getByRole("button", { name: "Pause transcription", exact: true }).click();
-  await expect(panel.getByRole("status")).toHaveText("Paused");
+  // Local pause is labelled apart from the capture the second viewer keeps running.
+  await expect(panel.getByRole("status")).toHaveText("Paused for you · others are transcribing this call");
   await expect(stage(other).getByRole("status").filter({ hasText: "Shared transcription active" })).toBeVisible();
   await expect.poll(() => metrics[1].subscribers).toBe(1);
   const count = await entries.getByRole("listitem").count();
@@ -667,15 +848,18 @@ test("adds two agents directly as call members with one transcription connection
   await sidebar(page).getByRole("button",{name:"Add agent",exact:true}).click();
   const agents=page.getByRole("region",{name:"Meeting agents",exact:true});
   await agents.getByRole("button",{name:"Add Research helper to call",exact:true}).click();
-  await expect(agents.getByRole("button",{name:"Remove Research helper from call",exact:true})).toBeVisible();
+  // Alone, the agent is the only reason for capture; with a second agent, neither is.
+  await expect(agents.getByRole("button",{name:"Remove Research helper from call and stop transcription",exact:true})).toBeVisible();
   await agents.getByRole("button",{name:"Add New helper to call",exact:true}).click();
   await expect(agents.getByRole("button",{name:"Remove New helper from call",exact:true})).toBeVisible();
+  await expect(agents.getByRole("button",{name:"Remove Research helper from call",exact:true})).toBeVisible();
   expect(connections).toBe(1);
   await expect(sidebar(page).getByRole("button",{name:"Research helper · Listening",exact:true})).toBeVisible();
   await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
   expect((await page.evaluate(()=>meetingTest.taskRequests())).filter(task=>task.text.includes("Live meeting session:")).length).toBe(2);
   await agents.getByRole("button",{name:"Remove Research helper from call",exact:true}).click();
   await expect(sidebar(page).getByRole("button",{name:"New helper · Listening",exact:true})).toBeVisible();
+  await expect(agents.getByRole("button",{name:"Remove New helper from call and stop transcription",exact:true})).toBeVisible();
   await page.getByRole("button",{name:"Show transcript",exact:true}).click();
   const transcript=page.getByRole("complementary",{name:"Meeting transcript",exact:true});
   await expect(transcript.getByRole("region",{name:"Transcript entries"})).toContainText(/research|notes/i,{timeout:45000});
@@ -702,6 +886,21 @@ test("creates a private meeting directly from its sidebar and returns keyboard f
   expect(await page.evaluate(()=>meetingTest.microphoneStates())).toEqual([]);
 });
 
+test("activates before a community is selected and binds workspaces and records once one is", async ({ page }) => {
+  const failures = []; page.on("pageerror", error => failures.push(error.message));
+  await page.goto(`${fixture}?cold&realm=cold-start`);
+  await expect(sidebar(page).getByRole("heading", { name: "Quick rooms" })).toBeVisible();
+  await page.evaluate(() => meetingTest.selectCommunity());
+  await linkGeneral(page);
+  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
+  await expect(records).toContainText("Save a transcript during or after a call");
+  await expect(records.getByRole("alert")).toHaveCount(0);
+  await page.evaluate(() => meetingTest.switchCommunity());
+  await page.evaluate(() => meetingTest.selectCommunity());
+  await expect(workspaces(page).getByRole("button", { name: "General Voice", exact: true })).toBeVisible();
+  expect(failures).toEqual([]);
+});
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);
   await page.routeWebSocket(/\/rooms$/,socket=>socket.onMessage(raw=>{

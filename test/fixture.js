@@ -141,7 +141,10 @@ Object.defineProperty(navigator, "mediaDevices", { value: new Proxy(devices, { g
   return typeof value === "function" ? value.bind(target) : value;
 } }) });
 const { apply } = await import("../plugin.js");
-apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage: host.storage,
+// Like Buzz, artifact storage cannot open before an identity and community are selected.
+const artifactStorage = { open(definition) { if (!connection.viewer || !connection.origin) throw new Error("Artifact storage needs a plugin, identity and relay"); return host.storage.open(definition); } };
+if (query.has("cold")) connection = { ...connection, status: "connecting", origin: undefined, scope: undefined };
+apply({ react: React, agents: query.has("no-agent-runtime") ? undefined : nativeAgents, artifactStorage,
   host: { async runCommand(id) { cameraSettingsCommands.push(id); return null; } },
   relay: { snapshot: () => connection, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
   conversation: { ui: { Workspace } },
@@ -177,6 +180,7 @@ window.meetingTest = {
   cameraStates: () => cameras.map(track => track.readyState),
   captureStates: () => captures.map(track => track.readyState),
   releaseMicrophone() { holdMicrophone = false; releaseMicrophone?.(); },
+  selectCommunity() { connection = { ...connection, status: "ready", origin, scope: origin + ":" + viewer }; for (const listener of listeners) listener(); },
   switchCommunity() { connection = { ...connection, origin: "https://another.example", scope: "another" }; for (const listener of listeners) listener(); },
   disable() { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); },
 };

@@ -1,25 +1,32 @@
-import type { MeetingRecords } from "./meeting-records";
+import { covers, type MeetingRecords } from "./meeting-records";
 import type { LiveAgents } from "./live-agents";
 import type * as ReactRuntime from "react";
-import type { MeetingTranscription } from "./meeting-transcription";
+import type { MeetingTranscription, RetainedTranscript } from "./meeting-transcription";
 import type { makeRoomSession } from "./room";
 import { speakerLabels } from "./speaker-labels";
+import { formatTranscript } from "./transcript-format";
 
 export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTranscription, media: ReturnType<typeof makeRoomSession>, archive?: { records: MeetingRecords; agents: LiveAgents; channel(roomName: string): string | undefined }) {
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
   let announceByDefault=false;
   try { announceByDefault=localStorage.getItem("meetings-announce-speech")==="true"; } catch { /* Default to quiet reading. */ }
-  return function TranscriptPanel({ roomName, close }: { roomName: string; close(): void }) {
-    const state = useSyncExternalStore(transcript.subscribe, transcript.snapshot);
+  // `review` shows a transcript kept from an earlier join instead of the live one.
+  return function TranscriptPanel({ roomName, close, review }: { roomName: string; close(): void; review?: RetainedTranscript }) {
+    const live = useSyncExternalStore(transcript.subscribe, transcript.snapshot);
+    const state = review ?? live;
     const call = useSyncExternalStore(media.subscribe, media.snapshot);
     const scroll = useRef<HTMLDivElement>(null), following = useRef(true);
     const [announce,setAnnounce]=useState(announceByDefault), [announcement,setAnnouncement]=useState("");
-    const announced=useRef({callId:state.callId,cursor:state.base+state.segments.length});
+    const announced=useRef({joinId:state.joinId,cursor:state.base+state.segments.length});
     const [away, setAway] = useState(false), [search, setSearch] = useState(""), [notice, setNotice] = useState("");
     const saved = useSyncExternalStore(archive?.records.subscribe ?? (() => () => {}), archive?.records.snapshot ?? (() => undefined));
-    const channelId = archive?.channel(roomName);
+    // A workspace transcript stays bound to its original channel after the call ends.
+    const channelId = state.channelId ?? archive?.channel(roomName);
+    const [confirmDiscard, setConfirmDiscard] = useState(false);
+    // Saved only when a record in this channel covers the transcript's last entry.
+    const savedHere = !!saved?.records.some(record => covers(record.value, channelId, state));
     async function copy() { try { await navigator.clipboard.writeText(text()); setNotice("Transcript copied."); } catch { setNotice("Copy is unavailable. Download the transcript instead."); } }
-    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${segments.map(row => `[${new Date(row.startedAt).toLocaleTimeString()}] ${speaker(row)}: ${row.text}`).join("\n\n")}`; }
+    function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${formatTranscript(segments)}`; }
     function download() {
       const url = URL.createObjectURL(new Blob([text()],{ type:"text/plain;charset=utf-8" })), link = document.createElement("a");
       link.href=url; link.download=`${roomName.replace(/[^a-z0-9_-]/gi,"_")}-transcript.txt`; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
@@ -29,28 +36,31 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const label=speakerLabels(segments.map(row=>({id:row.speakerId,name:row.speakerName})));
     const speaker=(row:typeof segments[number])=>label({id:row.speakerId,name:row.speakerName});
     const active = current && ["starting", "transcribing", "reconnecting"].includes(state.phase);
-    const status = !current ? "Off" : state.phase === "starting" ? "Starting…" : state.phase === "transcribing" ? "Transcribing" : state.phase === "reconnecting" ? "Reconnecting…" : state.phase === "ended" ? "Call ended" : state.phase === "error" ? "Interrupted" : state.phase === "paused" ? "Paused" : "Off";
+    // Separate this person's capture from room-wide capture that others keep running.
+    const othersCapturing = call.phase === "connected" && call.participants.some(person => !person.local && person.transcribing);
+    const local = !current ? "Off" : state.phase === "starting" ? "Starting…" : state.phase === "transcribing" ? "Transcribing" : state.phase === "reconnecting" ? "Reconnecting…" : state.phase === "ended" ? "Call ended" : state.phase === "error" ? "Interrupted" : state.phase === "paused" ? "Paused for you" : "Off";
+    const status = othersCapturing && !["Transcribing", "Starting…", "Reconnecting…"].includes(local) ? `${local} · others are transcribing this call` : local;
     useEffect(() => {
       if (following.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     }, [state.segments]);
     useEffect(() => {
       const cursor=state.base+state.segments.length;
-      if (!announce || !current || state.callId !== announced.current.callId || cursor < announced.current.cursor) setAnnouncement("");
+      if (!announce || !current || state.joinId !== announced.current.joinId || cursor < announced.current.cursor) setAnnouncement("");
       else if (cursor > announced.current.cursor) setAnnouncement(state.segments.slice(Math.max(0,announced.current.cursor-state.base)).map(row=>`${speaker(row)}: ${row.text}`).join(" ").slice(0,2000));
-      announced.current={callId:state.callId,cursor};
-    },[state.segments,state.callId,current,announce]);
+      announced.current={joinId:state.joinId,cursor};
+    },[state.segments,state.joinId,current,announce]);
     function latest() {
       following.current = true; setAway(false);
       if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     }
     return <aside className="meeting-chat meeting-transcript-panel text-body-sm" aria-label="Meeting transcript" data-buzz-ui="">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><h2>Transcript</h2></div></div><div className="panel-header-actions"><button type="button" className="buzz-button" data-buzz-ui="" data-button-shape="icon" data-icon-size="sm" data-icon-shape="control" data-icon-variant="ghost" aria-label="Close transcript" title="Close transcript" onClick={close}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M18 6l-12 12 M6 6l12 12" /></svg></button></div></header>
-      <div className="meeting-transcript-controls"><span className="text-caption text-subtle" role="status">{status}</span><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant={active ? "subtle" : "prominent"} disabled={!active && (call.phase !== "connected" || !call.transcription)} onClick={() => { if (active) transcript.stop(); else void transcript.start(); }}><span className="buzz-button-label">{active ? state.phase === "starting" ? "Cancel transcription" : "Pause transcription" : segments.length ? "Resume transcription" : "Start transcription"}</span></button></div>
-      {segments.length > 0 && <div className="meeting-transcript-actions"><input className="buzz-input" type="search" aria-label="Search transcript" placeholder="Find in transcript…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => { void copy(); }}>Copy</button><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={download}>Download</button>{channelId && archive && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" disabled={saved?.busy || saved?.pending} onClick={() => { void archive.records.save(channelId,state,archive.agents.snapshot()); }}>Save meeting record</button>}</div>}
+      <div className="meeting-transcript-controls"><span className="text-caption text-subtle" role="status">{status}</span>{!review && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant={active ? "subtle" : "prominent"} disabled={!active && (call.phase !== "connected" || !call.transcription)} onClick={() => { if (active) transcript.stop(); else void transcript.start(); }}><span className="buzz-button-label">{active ? state.phase === "starting" ? "Cancel transcription" : "Pause transcription" : segments.length ? "Resume transcription" : "Start transcription"}</span></button>}</div>
+      {segments.length > 0 && <div className="meeting-transcript-actions"><input className="buzz-input" type="search" aria-label="Search transcript" placeholder="Find in transcript…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => { void copy(); }}>Copy</button><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={download}>Download</button>{channelId && archive && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" disabled={saved?.busy || saved?.pending} onClick={() => { void archive.records.save(channelId,state,archive.agents); }}>Save meeting record</button>}{!active && (!!review || call.phase === "idle") && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => { if (confirmDiscard || savedHere) transcript.discard(state.joinId); else setConfirmDiscard(true); }}>{confirmDiscard ? "Confirm discard" : "Discard transcript"}</button>}</div>}
       {current && state.warning && <p role="status" className="meeting-transcript-notice text-subtle">{state.warning}</p>}
       {notice && <p className="meeting-transcript-notice text-caption">{notice}</p>}
       {saved?.error && <p role="alert" className="meeting-transcript-notice text-danger">{saved.error}</p>}
-      {saved?.saved && saved.records.some(record => record.id === saved.saved && record.value.callId === (state.sharedCallId ?? state.callId)) && <p className="meeting-transcript-notice text-caption">Saved in this workspace’s Meeting records.</p>}
+      {savedHere && <p className="meeting-transcript-notice text-caption">Saved in this workspace’s Meeting records.</p>}
       {saved?.pending && archive && <button type="button" className="buzz-button" data-buzz-ui="" disabled={saved.busy} onClick={() => { void archive.records.retry(); }}>Check / retry saved meeting</button>}
       {current && state.error && <p role="alert" className="meeting-transcript-notice text-danger">{state.error}</p>}
       <div className="meeting-transcript-scroll" ref={scroll} role="region" aria-label="Transcript entries" tabIndex={0} onScroll={() => {

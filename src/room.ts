@@ -8,7 +8,7 @@ import {
 import { openTranscription, type TranscriptSegment } from "./transcription";
 import { requestRoom } from "./admission";
 import { cameraError, captureError, captureScreen, limitCapture, presets, stopStream, untilCanceled, type Preset } from "./capture";
-import { inviteLink, socketUrl, type RoomRequest } from "./protocol";
+import { inviteLink, socketUrl, validOccurrence, type RoomRequest } from "./protocol";
 
 type RoomPhase = "idle" | "connecting" | "connected" | "reconnecting";
 type Capture = {
@@ -57,13 +57,17 @@ type ActiveRoom = {
   proof?: AdmissionProof;
   roomName?: string;
   workspaceChannelId?: string;
+  occurrenceId?: string;
   grid: Map<string, RemoteTrackPublication>;
 };
 export type AudioPreferences = { microphone: string; output: string; joinMuted: boolean };
 type Quality = VideoQuality | "auto";
 type Stream = { id: string; presenterId: string; presenter: string; muted: boolean };
 export type RoomSnapshot = {
-  sessionId?: string;
+  /** Local per-join ID. UI lifecycle only; never persisted or used as a key. */
+  joinId?: string;
+  /** Media room SID: one per call, shared by every attendee. Key tasks, transcripts and records on it. */
+  occurrenceId?: string;
   phase: RoomPhase;
   error?: string;
   invite?: ActiveRoom["invite"];
@@ -143,7 +147,7 @@ export function makeRoomSession() {
     }
     syncScreenAudio(run);
     emit({
-      sessionId: run.id, screenAudio: run.screenAudio, transcription: run.transcription, sharedTranscription: run.sharedTranscription,
+      joinId: run.id, occurrenceId: run.occurrenceId, screenAudio: run.screenAudio, transcription: run.transcription, sharedTranscription: run.sharedTranscription,
       transcriptActive: [...run.room.remoteParticipants.values()].some(person => person.identity.startsWith("transcription-")),
       phase, error, streams, invite: run.invite, picking: run.picking, capturePhase: run.capturePhase, cameraPhase: run.cameraPhase, cameraDenied: run.cameraDenied, stopping: run.stopping,
       sharing: run.publish && {
@@ -284,7 +288,8 @@ export function makeRoomSession() {
         }
       })
       .on(RoomEvent.Reconnecting, () => refresh(run, "reconnecting"))
-      .on(RoomEvent.Reconnected, () => refresh(run, "connected"))
+      // A full reconnect can land in a new room once the old one closed.
+      .on(RoomEvent.Reconnected, () => { refresh(run, "connected"); void confirmOccurrence(run); })
       .on(RoomEvent.Disconnected, () => {
         if (active === run && snapshot.phase !== "connecting") leave("The sharing session disconnected.");
       });
@@ -332,6 +337,9 @@ export function makeRoomSession() {
         await room.disconnect();
         return;
       }
+      run.occurrenceId = validOccurrence(admission.occurrenceId) ? admission.occurrenceId : undefined;
+      await confirmOccurrence(run);
+      if (active !== run) return;
       if (source && preset) await publishSource(run, source, preset);
       if (run.pendingMicrophone) {
         const track = run.pendingMicrophone.getAudioTracks()[0];
@@ -357,6 +365,15 @@ export function makeRoomSession() {
         ? "Microphone permission was denied. Allow microphone access, then join again."
         : error instanceof Error ? error.message : "Couldn’t join the meeting.");
     }
+  }
+
+  // The joined room's SID is authoritative. The broker's value is only a
+  // pre-connect hint: the room can close between admission and connection.
+  async function confirmOccurrence(run: ActiveRoom) {
+    try {
+      const sid = await untilCanceled(run.room.getSid(), AbortSignal.any([run.abort.signal, AbortSignal.timeout(5000)]));
+      if (active === run && validOccurrence(sid) && sid !== run.occurrenceId) { run.occurrenceId = sid; refresh(run); }
+    } catch { /* Keep the broker's value; a missing SID leaves occurrence-keyed work unavailable. */ }
   }
 
   async function setMuted(muted: boolean) {

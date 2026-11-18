@@ -1,5 +1,7 @@
 import type { LiveAgents } from "./live-agents";
 import type { makeRoomSession } from "./room";
+import type { MeetingTranscription, RetainedTranscript } from "./meeting-transcription";
+import { covers, type MeetingRecords } from "./meeting-records";
 import type * as ReactRuntime from "react";
 import { meetingAgents, type ConversationTarget } from "./agents-ui";
 import { makeWorkspaces, readable, writable, uuid, type Channel, type Storage, type WorkspaceConnection, type Workspaces, type WorkspaceState } from "./workspaces";
@@ -22,7 +24,7 @@ export const validWorkspaceRoute = (params: unknown) => !!params && typeof param
 const empty: WorkspaceState = { workspaces: [], busy: "", error: "", pending: [], loading: true };
 const noPanels: readonly PanelContribution[] = [];
 
-export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }> }) {
+export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void; review?: RetainedTranscript }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }>; transcript?: MeetingTranscription; records?: MeetingRecords }) {
   const React = ctx.react;
   const Agents = meetingAgents(ctx, liveAgents, media);
   const { useEffect, useState, useSyncExternalStore } = React;
@@ -140,7 +142,7 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const live = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
     const panels = useSyncExternalStore(ctx.panels.subscribe ?? subscribe, ctx.panels.snapshot ?? (() => noPanels));
     const call = useSyncExternalStore(media?.subscribe ?? subscribe, media?.snapshot ?? (() => undefined));
-    const [surface, setSurface] = useState<"notes" | "chat" | "agents" | "call" | "transcript" | "records">("notes");
+    const [surface, setSurface] = useState<"notes" | "chat" | "agents" | "call" | "transcript" | "review" | "records">("notes");
     const [service, setService] = useState<MeetingService>(), [voiceError, setVoiceError] = useState(""), [joining, setJoining] = useState(false);
     const params = navigation?.target.route?.params ?? navigation?.target.params;
     const route = validWorkspaceRoute(params) ? (params as { workspace: string }).workspace : undefined;
@@ -152,6 +154,19 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     const workspace = saved.workspaces.find(channel => channel.id === id);
     const access = sameScope && live.status === "ready" && readable(channel, live.viewer) && !!workspace;
     const inCall = !!call && call.workspaceChannelId === id && call.phase !== "idle";
+    // A transcript outlives its call until it is saved or discarded, bound to its original channel.
+    const captured = useSyncExternalStore(voice?.transcript?.subscribe ?? subscribe, voice?.transcript?.snapshot ?? (() => undefined));
+    const archived = useSyncExternalStore(voice?.records?.subscribe ?? subscribe, voice?.records?.snapshot ?? (() => undefined));
+    // Transcripts awaiting Save or Discard: this channel's ended call, then earlier joins kept on rejoin.
+    const currentEnded = !inCall && !!captured && captured.channelId === id && captured.segments.length > 0 && !["starting", "transcribing", "reconnecting"].includes(captured.phase);
+    const pending: RetainedTranscript[] = captured ? [...(currentEnded ? [{ ...captured, phase: "ended", error: "", retained: [] } as RetainedTranscript] : []), ...captured.retained.filter(item => item.channelId === id)] : [];
+    const item = pending[0];
+    const itemIsCurrent = currentEnded && item?.joinId === captured?.joinId;
+    const itemSaved = !!item && !!archived?.records.some(record => covers(record.value, id, item));
+    const [confirmDiscard, setConfirmDiscard] = useState(false);
+    useEffect(() => setConfirmDiscard(false), [item?.joinId, itemSaved]);
+    function discard() { if (itemSaved || confirmDiscard) { voice?.transcript?.discard(item?.joinId); if (surface === "review") setSurface(inCall ? "call" : "notes"); } else setConfirmDiscard(true); }
+    const reviewing = (surface === "review" || (surface === "transcript" && !inCall)) && !!item;
     useEffect(() => {
       setService(undefined); setVoiceError("");
       const abort = new AbortController();
@@ -187,9 +202,10 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
         {service && !service.workspaceVoice && <p className="meeting-workspace-footnote text-caption text-metadata">Workspace voice needs to be enabled on your meeting service.</p>}
         {service?.workspaceVoice && !enabled && <p className="meeting-workspace-footnote text-caption text-metadata">{!canEnable && "A channel owner or admin needs to enable voice. "}Enabling voice adds the Meetings service to this channel as a guest. It can verify members and transcribe the call, with access to channel history and files.</p>}
         {inCall && call?.error && <p role="alert" className="text-danger">{call.error}</p>}
-        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}<Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
+        {item && <div className="meeting-ended-call" role="group" aria-label="Ended call"><p role="status" className="text-body-sm">{!itemIsCurrent ? (itemSaved ? "An earlier call’s transcript is saved in Meeting records." : "An earlier call’s transcript isn’t saved yet.") : itemSaved ? "This call’s transcript is saved in Meeting records." : "The call ended. Its transcript isn’t saved yet."}{pending.length > 1 && ` ${pending.length - 1} more after this one.`}</p><div className="meeting-ended-call-actions">{!itemSaved && <Action onClick={() => setSurface("review")}>Review and save</Action>}<Action onClick={discard}>{itemSaved ? "Close transcript" : confirmDiscard ? "Confirm discard" : "Discard"}</Action></div></div>}
+        <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}{item && <Action aria-pressed={reviewing} onClick={() => setSurface("review")}>{inCall ? "Earlier transcript" : "Transcript"}</Action>}<Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
         <div className="meeting-workspace-surface" key={`${live.scope}:${id}`}>
-          {surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : surface === "transcript" && voice && inCall ? <voice.Transcript roomName={call!.roomName!} close={() => setSurface("call")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
+          {surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : reviewing && voice ? <voice.Transcript key={item.joinId} review={item} roomName={item.roomName ?? channel!.name} close={() => setSurface(inCall ? "call" : "notes")} /> : surface === "transcript" && voice && inCall ? <voice.Transcript roomName={call!.roomName!} close={() => setSurface("call")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
             : Conversation && live.scope ? <Conversation id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
         </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and task results stay with this channel after the call.</p>
       </>}{inCall && surface === "call" ? null : children}

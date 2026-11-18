@@ -13,17 +13,23 @@ export type AgentRuntime = {
   addInstructions(input: { id: string; text: string; when(agent: NativeAgent): boolean }): void;
   addTool(input: { name: string; description: string; inputSchema: Record<string, unknown>; call(client: Client, context: ToolContext, args: Record<string, unknown>): Promise<string> }): void;
 };
-type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string };
-type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; callId: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
+type Task = { key: string; title: string; status: string; result: string; delivery: "publishing" | "published" | "unconfirmed"; messageId?: string; author?: { pubkey: string; name: string } };
+type Session = { base: number; phase: "starting" | "listening"; root?: string; assigned: boolean; id: string; joinId: string; occurrenceId?: string; channelId: string; roomName: string; agent: NativeAgent; connection: WorkspaceConnection; mode: "assist" | "act"; mission: string; transcripts: TranscriptSegment[]; tasks: Task[]; stopped: boolean; abort: AbortController; transcriptCursor?: number; timer?: ReturnType<typeof setInterval>; lastWakeAt: number; notified: number; consumed: number; stopAccess?: () => void; stopActivity?: () => void };
 export type CallAgent = { pubkey: string; name: string; channelId: string; sessionId: string; phase: "starting" | "listening" };
-export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
+export type LiveAgentState = { members?: readonly CallAgent[]; phase: "idle" | "starting" | "listening"; error: string; sessionId?: string; agentName?: string; channelId?: string; occurrenceId?: string; transcripts: readonly TranscriptSegment[]; tasks: readonly Task[]; consumed: number; notified: number };
 export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; effect(setup: () => () => void): void }, media: ReturnType<typeof makeRoomSession>, transcript: MeetingTranscription) {
   const listeners = new Set<() => void>(), sessions = new Map<string, Session>();
   const active = new Map<string, Session>();
   let state: LiveAgentState = { phase: "idle", error: "", transcripts: [], tasks: [], consumed: 0, notified: 0 };
+  // Tasks belong to one channel and call occurrence, never to whichever agent ran last.
+  function tasksFor(channelId: string, occurrenceId?: string): Task[] {
+    if (!occurrenceId) return [];
+    return [...sessions.values()].filter(run => run.channelId === channelId && run.occurrenceId === occurrenceId).flatMap(run => run.tasks.map(task => ({ ...task })));
+  }
   function emit(next: Partial<LiveAgentState> = {}) {
     const runs = [...active.values()], last = runs.at(-1), recent = last ?? [...sessions.values()].at(-1);
-    state = { ...state, phase: runs.some(run => run.phase === "starting") ? "starting" : runs.length ? "listening" : "idle", members: runs.map(run => ({ pubkey: run.agent.pubkey, name: run.agent.name, channelId: run.channelId, sessionId: run.id, phase: run.phase })), ...(recent ? { sessionId: recent.id, channelId: recent.channelId, agentName: recent.agent.name, transcripts: [...recent.transcripts], tasks: [...sessions.values()].filter(run => run.callId === recent.callId).flatMap(run => run.tasks.map(task => ({ ...task }))), consumed: recent.consumed, notified: recent.notified } : {}), ...next };
+    const call = media.snapshot(), occurrence = call.phase === "idle" ? recent?.occurrenceId : call.occurrenceId;
+    state = { ...state, phase: runs.some(run => run.phase === "starting") ? "starting" : runs.length ? "listening" : "idle", members: runs.map(run => ({ pubkey: run.agent.pubkey, name: run.agent.name, channelId: run.channelId, sessionId: run.id, phase: run.phase })), ...(recent ? { sessionId: recent.id, channelId: recent.channelId, occurrenceId: occurrence, agentName: recent.agent.name, transcripts: [...recent.transcripts], tasks: tasksFor(recent.channelId, occurrence), consumed: recent.consumed, notified: recent.notified } : {}), ...next };
     for (const listener of listeners) listener();
   }
   function allowed(run: Session, write = false) {
@@ -31,18 +37,21 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     return current.session === run.connection.session && current.scope === run.connection.scope && current.viewer === run.agent.owner && current.status === "ready" && (write ? writable(channel, current.viewer) : readable(channel, current.viewer)) && !!channel?.members?.includes(run.agent.pubkey) && !!current.session.agentChoices?.snapshot().selectable.some(agent => agent.pubkey === run.agent.pubkey && !agent.deleting);
   }
   const currentRun = (run: Session) => active.get(run.agent.pubkey) === run;
+  const released: Session[] = [];
   function stop(error = "", pubkey?: string) {
     for (const run of [...active.values()]) {
       if (pubkey && run.agent.pubkey !== pubkey) continue;
       run.stopped = true; run.abort.abort(); clearInterval(run.timer); run.stopActivity?.(); run.stopAccess?.();
-      active.delete(run.agent.pubkey);
+      active.delete(run.agent.pubkey); released.push(run);
     }
+    // Release only this agent's capture interest; independently requested transcription continues.
+    for (const run of released.splice(0)) transcript.release(`agent:${run.agent.pubkey}`);
     void updateRoster().catch(() => {});
     emit({ error });
   }
   async function updateRoster() {
     const runs = [...active.values()].filter(run => run.phase === "listening"), call = media.snapshot();
-    if (call.sessionId) await media.setListener(call.sessionId, runs.length ? { name: runs.map(run => run.agent.name).join(", ").slice(0,64), mode: runs.some(run => run.mode === "act") ? "act" : "assist", agents:runs.map(run => ({pubkey:run.agent.pubkey,name:run.agent.name,mode:run.mode})) } : undefined);
+    if (call.joinId) await media.setListener(call.joinId, runs.length ? { name: runs.map(run => run.agent.name).join(", ").slice(0,64), mode: runs.some(run => run.mode === "act") ? "act" : "assist", agents:runs.map(run => ({pubkey:run.agent.pubkey,name:run.agent.name,mode:run.mode})) } : undefined);
   }
   function notify(run: Session) {
     if (!currentRun(run) || run.stopped || !run.assigned || !run.root || !allowed(run) || run.base + run.transcripts.length <= run.notified || !ctx.agents) return;
@@ -81,7 +90,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     const connection = ctx.relay.snapshot(), call = media.snapshot(), runtime = ctx.agents?.snapshot();
     const agent = runtime?.agents.find(agent => agent.pubkey === input.pubkey && agent.owner === connection.viewer && agent.place === "here" && runtime.running.some(running => running.key === agent.key));
     if (!agent || call.phase !== "connected" || call.roomName !== input.roomName || !input.mission.trim()) return emit({ error: "Choose one of your agents running on this device and join the linked voice room first." });
-    const run: Session = { base:0, phase: "starting", id: crypto.randomUUID(), assigned: false, callId: call.sessionId!, channelId: input.channelId, roomName: input.roomName, agent, connection, mode: input.mode, mission: input.mission.trim().slice(0,4000), transcripts: [], tasks: [], stopped: false, abort: new AbortController(), notified: 0, consumed: 0, lastWakeAt: 0 };
+    const run: Session = { base:0, phase: "starting", id: crypto.randomUUID(), assigned: false, joinId: call.joinId!, occurrenceId: call.occurrenceId, channelId: input.channelId, roomName: input.roomName, agent, connection, mode: input.mode, mission: input.mission.trim().slice(0,4000), transcripts: [], tasks: [], stopped: false, abort: new AbortController(), notified: 0, consumed: 0, lastWakeAt: 0 };
     if (!allowed(run, true)) return emit({ error: "The agent and you need current write access to this channel." });
     if (!call.transcription) return emit({ error: "Live listening needs speech support on the meeting service. Your current call does not offer it yet." });
     active.set(run.agent.pubkey, run);
@@ -93,13 +102,13 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     try {
       // Prepare audio on the Start gesture, but only attach the agent after its
       // native owner assignment is confirmed. Transcription has its own lifetime.
-      const startingTranscript = transcript.start();
+      const startingTranscript = transcript.start(`agent:${run.agent.pubkey}`);
       await assign(run);
       if (!currentRun(run) || run.stopped) return;
       await startingTranscript;
       if (!currentRun(run) || run.stopped) return;
       const source = transcript.snapshot();
-      if (source.callId !== run.callId || source.phase !== "transcribing") throw new Error(source.error || "Start transcription before enabling the live agent.");
+      if (source.joinId !== run.joinId || source.phase !== "transcribing") throw new Error(source.error || "Start transcription before enabling the live agent.");
       run.phase = "listening";
       await updateRoster();
       if (!currentRun(run) || run.stopped) return;
@@ -113,18 +122,28 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
   }
   ctx.effect(() => {
     const stopRuntime=ctx.agents?.subscribe(()=>emit());
+    let occurrence = media.snapshot().occurrenceId;
     const stopMedia = media.subscribe(() => {
       const call = media.snapshot();
+      if (call.occurrenceId !== occurrence && (call.occurrenceId || call.phase === "idle")) { occurrence = call.occurrenceId; emit(); }
       for (const run of [...active.values()]) {
-        if (call.sessionId !== run.callId || call.phase === "idle") stop("", run.agent.pubkey);
+        if (call.joinId !== run.joinId || call.phase === "idle") stop("", run.agent.pubkey);
+        // The SID can arrive after Add. A value-to-value change means a new call occurrence:
+        // end the session rather than file later tasks under the old one.
+        else if (!run.occurrenceId && call.occurrenceId) { run.occurrenceId = call.occurrenceId; emit(); }
+        else if (run.occurrenceId && call.occurrenceId && call.occurrenceId !== run.occurrenceId) stop(`${run.agent.name} stopped listening because the call restarted on the meeting service. Add it again to continue.`, run.agent.pubkey);
         else if (!allowed(run)) stop("Listening stopped because channel access changed.", run.agent.pubkey);
       }
     });
+    let holders = transcript.holders().join(",");
     const stopTranscript = transcript.subscribe(() => {
       const source = transcript.snapshot();
+      // Who requested capture changes what Remove does; keep that visible.
+      const nextHolders = transcript.holders().join(",");
+      if (nextHolders !== holders) { holders = nextHolders; emit(); }
       for (const run of [...active.values()]) {
         if (run.transcriptCursor === undefined) continue;
-        if (source.callId !== run.callId || !["transcribing", "reconnecting"].includes(source.phase)) { stop(source.error || (source.phase === "paused" ? "Agent input stopped because transcription paused." : ""), run.agent.pubkey); continue; }
+        if (source.joinId !== run.joinId || !["transcribing", "reconnecting"].includes(source.phase)) { stop(source.error || (source.phase === "paused" ? "Agent input stopped because transcription paused." : ""), run.agent.pubkey); continue; }
         if (!allowed(run)) { stop("Listening stopped because channel access changed.", run.agent.pubkey); continue; }
         const segments = source.segments.slice(Math.max(0, run.transcriptCursor - source.base)); run.transcriptCursor = source.base + source.segments.length;
         if (segments.length) { run.transcripts.push(...segments); if (run.transcripts.length > 4000) { const removed=run.transcripts.length-4000; run.transcripts.splice(0,removed); run.base+=removed; } emit(); notify(run); }
@@ -151,20 +170,23 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
     const previous = run.tasks.find(task => task.key === key);
     if (previous?.delivery === "unconfirmed" || previous?.delivery === "publishing") throw new Error("This task publication is pending or unconfirmed. Check native chat before another update.");
     if (previous?.title === title.trim() && previous.status === status && previous.result === result) return JSON.stringify(previous);
-    const task: Task = { key, title: title.trim(), status, result, delivery: "publishing" };
+    const task: Task = { key, title: title.trim(), status, result, delivery: "publishing", author: { pubkey: run.agent.pubkey, name: run.agent.name } };
     if (previous) run.tasks.splice(run.tasks.indexOf(previous), 1, task); else { if (run.tasks.length >= 64) throw new Error("This meeting’s task limit was reached."); run.tasks.push(task); }
-    if (currentRun(run)) emit();
+    // Tasks belong to the call occurrence, so results keep updating after listening stops.
+    emit();
     try {
       client.signal?.throwIfAborted(); sessionFor(client, context, args, true);
       const posted = await client.publish({ kind: 9, created_at: Math.floor(Date.now()/1000), tags: [["h",run.channelId], ["e",run.root!,"","reply"]], content: `Meeting task · ${task.title}\nStatus: ${status}${result ? `\n\n${result}` : ""}` });
       task.delivery = "published"; task.messageId = posted.id; return JSON.stringify(task);
     } catch (problem) { task.delivery = "unconfirmed"; throw problem; }
-    finally { if (currentRun(run)) emit(); }
+    finally { emit(); }
   } });
   function eligible(pubkey: string) {
     const runtime = ctx.agents?.snapshot(), owner = ctx.relay.snapshot().viewer;
     return !!runtime?.agents.some(agent => agent.pubkey === pubkey && agent.owner === owner && agent.place === "here" && runtime.running.some(running => running.key === agent.key));
   }
-  return { eligible, start, stop, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  /** True when this agent is the only remaining reason the call is being transcribed here. */
+  const stopsCapture = (pubkey: string) => { const current = transcript.holders(); return current.length === 1 && current[0] === `agent:${pubkey}`; };
+  return { eligible, start, stop, tasksFor, stopsCapture, snapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 export type LiveAgents = ReturnType<typeof makeLiveAgents>;
