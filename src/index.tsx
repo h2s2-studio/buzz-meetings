@@ -86,7 +86,9 @@ export function apply(ctx: Context) {
   const records = meetingRecords(ctx.relay,ctx.artifactStorage);
   // Documents and boards. Until the native adapter lands (after Gate 0), revisions live
   // in memory only; tests may supply their own store.
-  const artifactStore: ArtifactStore = (ctx as unknown as { meetingsArtifactStore?: ArtifactStore }).meetingsArtifactStore ?? memoryArtifactStore(() => ctx.relay.snapshot().viewer);
+  // Buzz throws when a plugin reads a context property it did not inject, so the
+  // browser tests hand over their store through a global, never through ctx.
+  const artifactStore: ArtifactStore = (globalThis as { meetingsTestArtifactStore?: ArtifactStore }).meetingsTestArtifactStore ?? memoryArtifactStore(() => ctx.relay.snapshot().viewer);
   const personName = (pubkey: string) => ctx.relay.snapshot().session.profiles.snapshot().get(pubkey)?.name || ctx.agents?.snapshot().agents.find(agent => agent.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
   const documents = documentsUI(React, { store: artifactStore, actor: () => ctx.relay.snapshot().viewer, name: personName,
     occurrence: channelId => media.snapshot().workspaceChannelId === channelId && media.snapshot().phase !== "idle" ? media.snapshot().occurrenceId : undefined });
