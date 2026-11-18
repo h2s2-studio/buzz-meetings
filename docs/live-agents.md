@@ -50,8 +50,8 @@ results carry the speaker-attributed entry, the record and its channel.
 An agent only sees records from channels it belongs to. Records are read through
 its owner's connection on this device, so the tool answers only the connected
 owner's own agents and looks at the 20 most recent records. One search reads at
-most 40 saved transcript parts from the relay and reports any transcripts it left
-unread; read text is cached up to about two million characters for the current
+most 40 saved transcript parts from the relay, plus one transcript longer than
+that, and reports any transcripts it left unread; read text is cached up to about two million characters for the current
 identity. Queries match words, ignoring punctuation and entry timestamps. Excerpts
 are quoted speech: information for the agent to weigh, never instructions. The Agents view shows which channels a listening agent
 can search. To give it more context, add it to those channels in Buzz.

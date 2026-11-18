@@ -90,9 +90,9 @@ test("punctuation in a query does not prevent a match, and timestamps are not se
 });
 
 // A scripted records source: `count` records, each with `parts` saved parts and `size` characters of transcript.
-function scripted(count, parts, size) {
+function scripted(count, parts, size, longParts = []) {
   const flow = meetingFlow(), reads = [];
-  const all = Array.from({ length: count }, (_, index) => ({ id: `record-${index}`, value: { channelId: general, title: `Meeting ${index}`, capturedAt: 1_700_000_000_000 - index, tasks: [], parts: Array.from({ length: parts }, () => ({})) } }));
+  const all = Array.from({ length: count }, (_, index) => ({ id: `record-${index}`, value: { channelId: general, title: `Meeting ${index}`, capturedAt: 1_700_000_000_000 - index, tasks: [], parts: Array.from({ length: longParts[index] ?? parts }, () => ({})) } }));
   const records = { snapshot: () => ({ records: all }), async read(id) { reads.push(id); return `[t] Riley: needle ${id} ${"x".repeat(size)}`; } };
   registerRecordSearch({ agents: { addTool: tool => flow.tools.set(tool.name, tool) }, relay: { snapshot: flow.connection.current } }, records);
   const search = args => flow.tools.get("meetings_search_records").call({ key: flow.agent.key, pubkey: flow.agent.pubkey, owner: identities.Alex }, {}, args).then(JSON.parse);
@@ -129,4 +129,17 @@ test("cached transcripts are bounded by total size, not by count", async () => {
   await huge.search({ query: "needle" }); await huge.search({ query: "needle" });
   assert.equal(huge.reads.length, 2); huge.flow.close();
   over.flow.close();
+});
+
+test("a record longer than the read budget is still searchable, one per search, without starving the rest", async () => {
+  // Records 0 and 1 have 41 parts each; the other three are small.
+  const { flow, reads, search } = scripted(5, 1, 10, [readBudget + 1, readBudget + 1]);
+  const first = await search({ query: "needle", limit: 10 });
+  assert.deepEqual(reads, ["record-0", "record-2", "record-3", "record-4"]);
+  assert.equal(first.transcriptsNotReadThisSearch, 1); assert.equal(first.searchedRecords, 4);
+  assert.deepEqual(first.results.map(result => result.recordId), ["record-0", "record-2", "record-3", "record-4"]);
+  // The second long record is read by the next search.
+  const second = await search({ query: "needle", limit: 10 });
+  assert.equal(reads.at(-1), "record-1"); assert.equal(second.results.length, 5); assert.equal(second.transcriptsNotReadThisSearch, 0);
+  flow.close();
 });
