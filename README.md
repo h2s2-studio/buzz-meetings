@@ -9,6 +9,8 @@ the Rust admission server and LiveKit.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
+![A workspace Overview showing who is in the call before joining](docs/screenshots/meetings-overview.png)
+
 Screenshots use the browser fixture. Media transport is real; native content and
 agent execution are simulated and still require acceptance in Buzz.
 
