@@ -1,4 +1,3 @@
-import { agentQuestionUI } from "./agent-question-ui";
 import type { LiveAgents, LiveAgentState } from "./live-agents";
 import type { makeRoomSession, RoomSnapshot } from "./room";
 import type * as ReactRuntime from "react";
@@ -33,7 +32,6 @@ const templates = {
 
 export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; navigation: { open(target: ConversationTarget): Promise<unknown> } }, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, openResult?: (channelId: string, messageId: string) => void) {
   const React = ctx.react;
-  const { AgentQuestion } = agentQuestionUI(ctx.react, liveAgents);
   const AgentIcon=agentIcon(React);
   const { useEffect, useState, useSyncExternalStore } = React;
   const drafts = new WeakMap<object, Map<string, { selected: string; draft: string; kind: keyof typeof templates; liveMode: "act" | "assist"; mission: string }>>();
