@@ -24,7 +24,9 @@ export const validWorkspaceRoute = (params: unknown) => !!params && typeof param
 const empty: WorkspaceState = { workspaces: [], busy: "", error: "", pending: [], loading: true };
 const noPanels: readonly PanelContribution[] = [];
 
-export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void; review?: RetainedTranscript }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }>; transcript?: MeetingTranscription; records?: MeetingRecords }) {
+export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, voice?: { broker(): string; join(channel: Channel): Promise<void>; startTranscript(): void; Transcript: ReactRuntime.ComponentType<{ roomName: string; close(): void; review?: RetainedTranscript }>; Call: ReactRuntime.ComponentType; Roster: ReactRuntime.ComponentType; Records: ReactRuntime.ComponentType<{ channelId: string }>; transcript?: MeetingTranscription; records?: MeetingRecords;
+  /** Temporary (name-based) meetings saved on this device; listed in the same Meetings list. */
+  temporary?: { Rows: ReactRuntime.ComponentType; count(): number; add(name: string): string; manage(): void } }) {
   const React = ctx.react;
   const Agents = meetingAgents(ctx, liveAgents, media);
   const { useEffect, useState, useSyncExternalStore } = React;
@@ -65,7 +67,12 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
   }
   function CreateMeeting() {
     const saved=useStateSnapshot(), id=React.useId(), trigger=React.useRef<HTMLButtonElement>(null), dialog=React.useRef<HTMLDivElement>(null), nameInput=React.useRef<HTMLInputElement>(null);
-    const [name,setName]=useState("");
+    const [name,setName]=useState(""), [temporaryError,setTemporaryError]=useState("");
+    function addTemporary() {
+      const problem = voice?.temporary?.add(name) ?? "";
+      setTemporaryError(problem);
+      if (!problem) { dialog.current?.hidePopover(); setName(""); }
+    }
     async function create(event: ReactRuntime.FormEvent) {
       event.preventDefault(); const owner=controller;
       if (!owner || saved.busy || !name.trim()) return;
@@ -91,11 +98,14 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
       <div ref={dialog} id={id} popover="auto" className="meeting-create-dialog text-body-sm" role="dialog" aria-label="Create meeting" data-buzz-ui="" onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();dismiss();}}}>
         <form onSubmit={event=>{void create(event);}}>
           <header><h3 className="text-body-sm">Create meeting</h3><button type="button" className="buzz-button" data-buzz-ui="" onClick={dismiss} aria-label="Close create meeting">×</button></header>
-          <label>Meeting name<input ref={nameInput} className="buzz-input" value={name} maxLength={64} disabled={!!saved.busy} onChange={event=>setName(event.target.value)} /></label>
+          <label>Meeting name<input ref={nameInput} className="buzz-input" value={name} maxLength={64} disabled={!!saved.busy} onChange={event=>{setName(event.target.value);setTemporaryError("");}} /></label>
           <p className="text-caption text-subtle">Private by default. Invite people through its channel when you’re ready.</p>
           <button type="submit" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="prominent" disabled={!!saved.busy || !!saved.creation || !name.trim()}>{saved.busy || "Create meeting"}</button>
+          {voice?.temporary && <><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" disabled={!name.trim()} onClick={addTemporary}>Add temporary meeting</button><p className="text-caption text-subtle">A temporary meeting is voice only and saved on this device. Others join it by its name.</p></>}
+          {temporaryError && <p role="alert" className="text-danger">{temporaryError}</p>}
           {saved.error && <p role="alert" className="text-danger">{saved.error}</p>}{saved.creation && <p className="text-caption text-subtle">A previous creation needs checking in meeting settings.</p>}
           <Action onClick={()=>{dialog.current?.hidePopover();manage();}}>Link an existing channel or change settings</Action>
+          {voice?.temporary && <Action onClick={()=>{dialog.current?.hidePopover();voice.temporary!.manage();}}>Manage temporary meetings</Action>}
         </form>
       </div>
     </>;
@@ -103,10 +113,12 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
   function Sidebar() {
     const current = useStateSnapshot();
     const call = useSyncExternalStore(media?.subscribe ?? subscribe, media?.snapshot ?? (() => undefined));
-    return <nav className="navigation-section meeting-workspace-navigation" aria-label="Shared workspaces">
+    // One list: shared workspaces first, then this device's temporary meetings.
+    return <nav className="navigation-section meeting-workspace-navigation" aria-label="Meetings">
       <header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Meetings</h2><span className="navigation-section-heading-actions"><Action aria-label="Manage workspaces" onClick={() => manage()}>⋯</Action><CreateMeeting /></span></header>
       {current.workspaces.map(channel => <React.Fragment key={channel.id}><button key={channel.id} className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={current.selected === channel.id || undefined} aria-current={current.selected === channel.id ? "page" : undefined} type="button" onClick={() => open(channel.id)}><span className="navigation-item-label">{channel.name}</span></button>{voice && call?.workspaceChannelId === channel.id && call.phase !== "idle" && <voice.Roster />}</React.Fragment>)}
-      {!current.workspaces.length && <p className="meeting-workspace-hint text-caption text-metadata">{current.loading ? "Loading workspaces…" : "Create a meeting to keep voice, chat and notes together."}</p>}
+      {voice?.temporary && <voice.temporary.Rows />}
+      {!current.workspaces.length && !voice?.temporary?.count() && <p className="meeting-workspace-hint text-caption text-metadata">{current.loading ? "Loading workspaces…" : "Create a meeting to keep voice, chat and notes together."}</p>}
       {current.pending.length > 0 && <Action onClick={() => manage()}>Review {current.pending.length} saved {current.pending.length === 1 ? "link" : "links"}</Action>}
       {(current.error || current.syncError) && <p className="meeting-workspace-hint text-caption text-danger" role="status">{current.error || current.syncError}</p>}
     </nav>;

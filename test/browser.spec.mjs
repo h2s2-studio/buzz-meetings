@@ -13,7 +13,18 @@ test.beforeAll(async () => {
   await site.listen(); fixture = `http://127.0.0.1:${site.httpServer.address().port}/test/fixture.html`;
 });
 test.afterAll(async () => { await site.close(); });
-const sidebar = page => page.getByRole("navigation", { name: "Meeting rooms" });
+const sidebar = page => page.getByRole("navigation", { name: "Meetings", exact: true });
+// Temporary meetings (formerly quick rooms) are added and managed from the Meetings "+" dialog.
+async function addTemporary(page, name) {
+  await sidebar(page).getByRole("button", { name: "Create meeting", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create meeting", exact: true });
+  await dialog.getByLabel("Meeting name", { exact: true }).fill(name);
+  await dialog.getByRole("button", { name: "Add temporary meeting", exact: true }).click();
+}
+async function manageTemporary(page) {
+  await sidebar(page).getByRole("button", { name: "Create meeting", exact: true }).click();
+  await page.getByRole("dialog", { name: "Create meeting", exact: true }).getByRole("button", { name: "Manage temporary meetings", exact: true }).click();
+}
 const stage = page => page.getByRole("region", { name: "Meeting", exact: true });
 const controls = page => stage(page).getByRole("group", { name: "Meeting controls" });
 const join = page => sidebar(page).getByRole("button", { name: "Join General Voice", exact: true });
@@ -35,20 +46,18 @@ async function playback(locator) {
 }
 test("automatically presents rooms, persists names, and reports denied microphone permission", async ({ page }) => {
   await page.goto(`${fixture}?deny`);
-  await expect(sidebar(page).getByRole("heading", { name: "Quick rooms" })).toBeVisible();
-  await page.getByRole("button", { name: "Add voice channel" }).click();
-  await page.getByLabel("Room name", { exact: true }).fill("Design Room");
-  await page.getByRole("button", { name: "Add room", exact: true }).click();
+  await expect(sidebar(page).getByRole("heading", { name: "Meetings" })).toBeVisible();
+  await addTemporary(page, "Design Room");
   await page.reload();
   await expect(sidebar(page).getByRole("button", { name: "Join Design Room" })).toBeVisible();
-  const addRoom=page.getByRole("button",{name:"Add voice channel",exact:true});
-  await addRoom.click();
-  await page.getByLabel("Room name",{exact:true}).fill("General Voice");
-  await page.getByRole("button",{name:"Add room",exact:true}).click();
-  await expect(sidebar(page).getByRole("alert")).toContainText("already in your list");
-  await expect(page.getByLabel("Room name",{exact:true})).toHaveValue("General Voice");
-  await page.getByRole("button",{name:"Cancel adding room",exact:true}).click();
-  await expect(addRoom).toBeFocused();
+  await expect(sidebar(page).getByRole("button", { name: "Join Design Room" })).toContainText("Temporary");
+  const trigger = sidebar(page).getByRole("button", { name: "Create meeting", exact: true });
+  await addTemporary(page, "General Voice");
+  const dialog = page.getByRole("dialog", { name: "Create meeting", exact: true });
+  await expect(dialog.getByRole("alert")).toContainText("already in your list");
+  await expect(dialog.getByLabel("Meeting name", { exact: true })).toHaveValue("General Voice");
+  await dialog.getByLabel("Meeting name", { exact: true }).press("Escape");
+  await expect(trigger).toBeFocused();
   await join(page).click();
   await expect(page.getByRole("alert")).toContainText("Microphone permission was denied");
   await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
@@ -61,33 +70,31 @@ test("top-aligns rooms below host navigation and persists create, rename, and re
   const heading = await workspaces(page).getByRole("heading", { name: "Meetings",exact:true }).boundingBox();
   expect(heading.y).toBeLessThan(activity.y + activity.height + 64);
   expect(heading.y).toBeLessThan(200);
-  const meetings = await workspaces(page).boundingBox();
-  const quickHeading = await sidebar(page).getByRole("heading",{name:"Quick rooms",exact:true}).boundingBox();
-  expect(quickHeading.y-meetings.y-meetings.height).toBeGreaterThanOrEqual(0);
-  expect(quickHeading.y-meetings.y-meetings.height).toBeLessThan(64);
-  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
-  await page.getByLabel("Channel name", { exact: true }).fill("Design Room");
-  await page.getByRole("button", { name: "Create voice channel", exact: true }).click();
+  // One list: saved temporary meetings sit inside the Meetings section.
+  await expect(sidebar(page).getByRole("button", { name: "Join General Voice", exact: true })).toBeVisible();
+  await manageTemporary(page);
+  await page.getByLabel("Meeting name", { exact: true }).fill("Design Room");
+  await page.getByRole("button", { name: "Add temporary meeting", exact: true }).click();
   await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
-  await page.getByLabel("New channel name", { exact: true }).fill("Lounge");
-  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByLabel("New meeting name", { exact: true }).fill("Lounge");
+  await page.getByRole("button", { name: "Save meeting name", exact: true }).click();
   await expect(page.getByRole("button", { name: "Rename Lounge", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Rename Lounge", exact: true }).click();
-  await page.getByLabel("New channel name", { exact: true }).fill("Design Room");
-  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByLabel("New meeting name", { exact: true }).fill("Design Room");
+  await page.getByRole("button", { name: "Save meeting name", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("already in your list");
   await page.getByRole("button", { name: "Cancel rename", exact: true }).click();
   if (test.info().project.name === "chromium") { await page.setViewportSize({ width: 1280, height: 787 }); await page.screenshot({ path: "docs/screenshots/meetings-manage.png" }); }
   await page.getByRole("button", { name: "Remove Lounge", exact: true }).click();
-  await page.getByRole("button", { name: "Remove channel shortcut", exact: true }).click();
+  await page.getByRole("button", { name: "Remove temporary meeting", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(sidebar(page).getByRole("button", { name: "Join Lounge", exact: true })).toHaveCount(0);
   await expect(sidebar(page).getByRole("button", { name: "Join Design Room", exact: true })).toBeVisible();
   await page.reload();
   await expect(join(page)).toHaveCount(0);
-  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await manageTemporary(page);
   await page.getByRole("button", { name: "Remove Design Room", exact: true }).click();
-  await page.getByRole("button", { name: "Remove channel shortcut", exact: true }).click();
+  await page.getByRole("button", { name: "Remove temporary meeting", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await expect(page.getByText("Start a meeting to talk, share a screen, or work through something together.")).toBeVisible();
   await page.reload();
@@ -103,9 +110,7 @@ test("keeps the native room conversation available after failed voice and isolat
   await join(page).click();
   await expect(page.getByRole("alert")).toContainText("Microphone permission was denied");
   await expect(conversation).toContainText("Notes for General Voice");
-  await page.getByRole("button", { name: "Add voice channel" }).click();
-  await page.getByLabel("Room name", { exact: true }).fill("Design");
-  await page.getByRole("button", { name: "Add room", exact: true }).click();
+  await addTemporary(page, "Design");
   await sidebar(page).getByRole("button", { name: "Join Design", exact: true }).click();
   await expect(conversation).toHaveAttribute("data-channel", design);
   await expect(conversation).not.toContainText("Notes for General Voice");
@@ -120,7 +125,7 @@ test("cancels a pending microphone prompt without leaking a late capture", async
   await expect(page.getByRole("status")).toHaveCount(0);
 });
 
-const workspaces = page => page.getByRole("navigation", { name: "Shared workspaces" });
+const workspaces = page => page.getByRole("navigation", { name: "Meetings", exact: true });
 const workspace = page => page.getByRole("region", { name: "Persistent workspace", exact: true });
 async function linkGeneral(page) {
   await page.getByRole("button", { name: "Save as shared workspace", exact: true }).click();
@@ -273,9 +278,7 @@ test("cancels stalled device requests and rejoins without waiting for late captu
   await page.addInitScript(() => Object.defineProperty(navigator, "platform", { value: "MacIntel" }));
   await page.goto(`${fixture}?viewer=Alex&realm=capture-recovery`);
   const room = `Capture recovery ${info.project.name}`;
-  await page.getByRole("button", { name: "Add voice channel" }).click();
-  await page.getByLabel("Room name", { exact: true }).fill(room);
-  await page.getByRole("button", { name: "Add room", exact: true }).click();
+  await addTemporary(page, room);
   const joinRecovery = sidebar(page).getByRole("button", { name: `Join ${room}`, exact: true });
   await joinRecovery.click();
   await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
@@ -375,9 +378,7 @@ test("joins voice in one click, hears peers, mutes, watches simultaneous screens
   await expect(roster.getByRole("listitem")).toHaveCount(2);
   expect(await first.evaluate(() => meetingTest.microphoneStates())).toEqual(["ended"]);
   expect(await first.evaluate(() => meetingTest.captureStates())).toEqual(["ended", "ended"]);
-  await page.getByRole("button", { name: "Add voice channel" }).click();
-  await page.getByLabel("Room name", { exact: true }).fill("Design");
-  await page.getByRole("button", { name: "Add room", exact: true }).click();
+  await addTemporary(page, "Design");
   await sidebar(page).getByRole("button", { name: "Join Design", exact: true }).click();
   await expect(stage(page).getByRole("heading", { name: "Design", exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => meetingTest.microphoneStates())).toEqual(["ended", "live"]);
@@ -470,33 +471,37 @@ test("keeps a same-name quick room and workspace distinct across selection, rena
   await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
   await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
   const quick = sidebar(page).getByRole("button", { name: "Join General Voice", exact: true });
-  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toBeVisible();
+  // One roster, under the workspace row; the same-name temporary row stays idle.
+  const quickRoster = quick.locator("xpath=..").getByRole("list", { name: "Connected participants" });
+  await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(1);
+  await expect(quickRoster).toHaveCount(0);
   await expect(quick).not.toHaveAttribute("aria-current", "true");
-  await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  await expect(quick).toContainText("Temporary");
   // Return from Messages lands on the workspace call, not the same-name quick room.
   await page.getByRole("button", { name: "Messages", exact: true }).click();
   await page.getByRole("toolbar", { name: "Buzz toolbar" }).getByRole("button", { name: "General Voice", exact: true }).click();
   await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Voice", exact: true })).toHaveAttribute("aria-pressed", "true");
   // Renaming the quick shortcut never leaves the workspace call.
-  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await manageTemporary(page);
   await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
-  await page.getByLabel("New channel name", { exact: true }).fill("Lounge");
-  await expect(page.getByRole("button", { name: "Save channel name", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByLabel("New meeting name", { exact: true }).fill("Lounge");
+  await expect(page.getByRole("button", { name: "Save meeting name", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save meeting name", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await workspaces(page).getByRole("button", { name: "General Voice", exact: true }).click();
   await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage voice channels", exact: true }).click();
+  await manageTemporary(page);
   await page.getByRole("button", { name: "Rename Lounge", exact: true }).click();
-  await page.getByLabel("New channel name", { exact: true }).fill("General Voice");
-  await page.getByRole("button", { name: "Save channel name", exact: true }).click();
+  await page.getByLabel("New meeting name", { exact: true }).fill("General Voice");
+  await page.getByRole("button", { name: "Save meeting name", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   // Selecting the quick room joins it instead of reusing the workspace connection.
   const occurrence = await view.getByRole("group", { name: "Meeting controls" }).getAttribute("data-occurrence");
   await quick.click();
   await expect(controls(page).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
   await expect(quick).toHaveAttribute("aria-current", "true");
-  await expect(workspaces(page).getByRole("list", { name: "Connected participants" })).toHaveCount(0);
+  await expect(quickRoster).toHaveCount(1);
+  await expect(sidebar(page).getByRole("list", { name: "Connected participants" })).toHaveCount(1);
   await expect(controls(page)).not.toHaveAttribute("data-occurrence", occurrence);
 });
 test("identifies a call occurrence by its media room across rejoin and replaces it after the room empties", async ({ page, context }, info) => {
@@ -506,9 +511,7 @@ test("identifies a call occurrence by its media room across rejoin and replaces 
   // A room of its own: a page closed mid-call elsewhere keeps a shared room alive until LiveKit times it out.
   const roomName = `Occurrence ${info.project.name} ${Date.now() % 100000}`;
   for (const client of [page, other]) {
-    await client.getByRole("button", { name: "Add voice channel", exact: true }).click();
-    await client.getByLabel("Room name", { exact: true }).fill(roomName);
-    await client.getByRole("button", { name: "Add room", exact: true }).click();
+    await addTemporary(client, roomName);
   }
   const room = client => sidebar(client).getByRole("button", { name: `Join ${roomName}`, exact: true });
   const occurrence = async client => { await expect(controls(client)).toHaveAttribute("data-occurrence", /^RM_[A-Za-z0-9]+$/, { timeout: 15000 }); return controls(client).getAttribute("data-occurrence"); };
@@ -711,9 +714,7 @@ test("transcribes a room without an agent or linked channel and preserves text a
   await Promise.all([page.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Alex`), other.goto(`${fixture}?realm=independent-transcript&speech&no-agent-runtime&viewer=Riley&profile-name=Alex`)]);
   const roomName = "Unlinked call";
   for (const client of [page, other]) {
-    await client.getByRole("button", { name: "Add voice channel", exact: true }).click();
-    await client.getByLabel("Room name", { exact: true }).fill(roomName);
-    await client.getByRole("button", { name: "Add room", exact: true }).click();
+    await addTemporary(client, roomName);
     await sidebar(client).getByRole("button", { name: `Join ${roomName}`, exact: true }).click();
     await expect(controls(client).getByRole("status")).toHaveText("Voice connected");
   }
@@ -895,7 +896,7 @@ test("creates a private meeting directly from its sidebar and returns keyboard f
 test("activates before a community is selected and binds workspaces and records once one is", async ({ page }) => {
   const failures = []; page.on("pageerror", error => failures.push(error.message));
   await page.goto(`${fixture}?cold&realm=cold-start`);
-  await expect(sidebar(page).getByRole("heading", { name: "Quick rooms" })).toBeVisible();
+  await expect(sidebar(page).getByRole("heading", { name: "Meetings" })).toBeVisible();
   await page.evaluate(() => meetingTest.selectCommunity());
   await linkGeneral(page);
   await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();

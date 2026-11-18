@@ -88,7 +88,8 @@ export function apply(ctx: Context) {
   });
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
   ctx.effect(() => () => { transcript.close(); records.close(); });
-  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records });
+  const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records,
+    temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() } });
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
   const storageKey = () => `studio.h2s2.meeting:${connection.scope || connection.origin}:${connection.viewer}:rooms`;
@@ -172,7 +173,7 @@ export function apply(ctx: Context) {
   }
   function nameError(value: string, original?: string) {
     if (!value || value.length > 64 || /[\p{Cc}]/u.test(value)) return "Enter a channel name of 1–64 characters.";
-    if (rooms.some(room => room !== original && roomKey(room) === roomKey(value))) return "A voice channel with this name is already in your list.";
+    if (rooms.some(room => room !== original && roomKey(room) === roomKey(value))) return "A temporary meeting with this name is already in your list.";
     return "";
   }
   // A call is identified by destination kind plus a stable ID: workspace calls by
@@ -386,26 +387,25 @@ export function apply(ctx: Context) {
       </div>
     </div>;
   }
-  function Sidebar({ children }: { children?: ReactRuntime.ReactNode }) {
+  // Saved temporary-meeting shortcuts (formerly "quick rooms"), migrated in place.
+  function addTemporary(name: string) {
+    const value = validName(name);
+    const problem = nameError(value) || (rooms.length >= 32 ? "You can save up to 32 temporary meetings on this device." : "");
+    if (!problem) saveRooms([...rooms, value]);
+    return problem;
+  }
+  function TemporaryRows() {
     const state = useUI(); const call = useCall();
-    const [adding, setAdding] = useState(false); const [name, setName] = useState(""), [issue,setIssue]=useState("");
-    const addTrigger=useRef<HTMLButtonElement>(null);
-    function closeAdd() { setAdding(false); setName(""); setIssue(""); addTrigger.current?.focus(); }
-    function add(event: ReactRuntime.FormEvent) {
-      event.preventDefault(); const value = validName(name);
-      const problem=nameError(value) || (rooms.length>=32 ? "You can save up to 32 voice channels on this device." : "");
-      if (problem) { setIssue(problem); return; }
-      saveRooms([...rooms, value]); closeAdd();
-    }
+    return <>{state.rooms.map(name => <div className="meeting-room" key={name}>
+      <button type="button" className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={inQuickRoom(call, name) || undefined} aria-label={`Join ${name}`} aria-current={inQuickRoom(call, name) ? "true" : undefined}
+        onClick={() => join(name)}><Icon name="headphones" /><span className="navigation-item-label">{name}</span>{inQuickRoom(call, name) ? <span className="buzz-count-badge">{memberCount(call) || "…"}</span> : <span className="meeting-temporary-tag text-caption text-metadata">Temporary</span>}</button>
+      {inQuickRoom(call, name) && <Roster call={call} />}
+    </div>)}</>;
+  }
+  function Sidebar({ children }: { children?: ReactRuntime.ReactNode }) {
+    const call = useCall();
     return <div className="shell-sidebar-default meeting-sidebar" data-buzz-ui="">
-      <div className="meeting-sidebar-pages">{children}</div><div className="meeting-sidebar-navigation"><workspaces.Sidebar /><nav className="navigation-section" aria-label="Meeting rooms"><header className="navigation-section-heading"><h2 className="navigation-section-heading-label text-caption text-metadata">Quick rooms</h2><span className="navigation-section-heading-actions"><Button label="Manage voice channels" icon="settings" iconOnly variant="ghost" onClick={openManagement} /><Button ref={addTrigger} label="Add voice channel" icon="plus" iconOnly variant="ghost" disabled={state.rooms.length >= 32} onClick={() => { if(adding) closeAdd(); else setAdding(true); }} /></span></header>
-        {adding && <form onSubmit={add} onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();closeAdd();}}}><label>Room name<input className="buzz-input" value={name} maxLength={64} autoFocus onChange={event => {setName(event.target.value);setIssue("");}} /></label>{issue && <p role="alert" className="text-caption text-danger">{issue}</p>}<div className="meeting-setting-actions"><Button label="Cancel adding room" variant="ghost" onClick={closeAdd} /><Button label="Add room" onClick={add} /></div></form>}
-        {state.rooms.map(name => <div className="meeting-room" key={name}>
-          <button type="button" className="navigation-item" data-buzz-ui="" data-variant="row" data-selected={inQuickRoom(call, name) || undefined} aria-label={`Join ${name}`} aria-current={inQuickRoom(call, name) ? "true" : undefined}
-            onClick={() => join(name)}><Icon name="headphones" /><span className="navigation-item-label">{name}</span>{inQuickRoom(call, name) && <span className="buzz-count-badge">{memberCount(call) || "…"}</span>}</button>
-          {inQuickRoom(call, name) && <Roster call={call} />}
-        </div>)}
-      </nav></div>{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" data-connected={call.phase === "connected" || undefined} /><div><span>{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
+      <div className="meeting-sidebar-pages">{children}</div><div className="meeting-sidebar-navigation"><workspaces.Sidebar /></div>{call.phase !== "idle" && <div className="meeting-sidebar-status"><span className="meeting-status-dot" data-connected={call.phase === "connected" || undefined} /><div><span>{call.phase === "connected" ? "Voice connected" : call.phase === "reconnecting" ? "Reconnecting…" : "Connecting…"}</span><small>{call.roomName}</small></div></div>}
     </div>;
   }
   function Video({ stream, label }: { stream: MediaStream; label: string }) {
@@ -442,7 +442,7 @@ export function apply(ctx: Context) {
     useEffect(() => { setDraft(""); setEditing(undefined); setRemoving(undefined); setError(""); }, [scope, connection.viewer, connection.origin]);
     function add(event: ReactRuntime.FormEvent) {
       event.preventDefault(); const value = validName(draft);
-      const problem = nameError(value) || (rooms.length >= 32 ? "You can save up to 32 voice channels on this device." : "");
+      const problem = nameError(value) || (rooms.length >= 32 ? "You can save up to 32 temporary meetings on this device." : "");
       if (problem) { setError(problem); return; }
       saveRooms([...rooms, value]); setDraft(""); setError("");
     }
@@ -466,15 +466,15 @@ export function apply(ctx: Context) {
       saveRooms(rooms.filter(room => room !== name)); setRemoving(undefined); setError("");
     }
     return <div className="meeting-room-settings text-body-sm" data-buzz-ui="">
-      <p className="text-subtle">Manage the voice-channel shortcuts saved on this device. Other people join the same room by using its name.</p>
-      <form className="meeting-room-create" onSubmit={add}><label>Channel name<input className="buzz-input" value={draft} maxLength={64} onChange={event => setDraft(event.target.value)} /></label><Button label="Create voice channel" icon="plus" disabled={state.rooms.length >= 32} onClick={add} /></form>
+      <p className="text-subtle">Manage the temporary meetings saved on this device. Other people join the same room by using its name.</p>
+      <form className="meeting-room-create" onSubmit={add}><label>Meeting name<input className="buzz-input" value={draft} maxLength={64} onChange={event => setDraft(event.target.value)} /></label><Button label="Add temporary meeting" icon="plus" disabled={state.rooms.length >= 32} onClick={add} /></form>
       {error && <p role="alert" className="text-danger">{error}</p>}
       <div className="buzz-settings-group meeting-room-list">
-        {state.rooms.length === 0 && <p className="text-subtle">No voice channels saved. Create one above to get started.</p>}
+        {state.rooms.length === 0 && <p className="text-subtle">No temporary meetings saved. Add one above to get started.</p>}
         {state.rooms.map(name => <div className="meeting-room-setting" key={name}>
-          {editing?.original === name ? <form onSubmit={rename}><label>New channel name<input className="buzz-input" autoFocus value={editing.name} maxLength={64} onChange={event => setEditing({ original: name, name: event.target.value })} /></label><p className="text-caption text-metadata">The new name selects a different voice room. Your linked text conversation stays the same.{inQuickRoom(call, name) ? " Your current call will end." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel rename" variant="ghost" onClick={() => { setEditing(undefined); setError(""); }} /><Button label={inQuickRoom(call, name) ? "Leave and rename" : "Save channel name"} onClick={rename} /></div></form>
+          {editing?.original === name ? <form onSubmit={rename}><label>New meeting name<input className="buzz-input" autoFocus value={editing.name} maxLength={64} onChange={event => setEditing({ original: name, name: event.target.value })} /></label><p className="text-caption text-metadata">The new name selects a different voice room. Your linked text conversation stays the same.{inQuickRoom(call, name) ? " Your current call will end." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel rename" variant="ghost" onClick={() => { setEditing(undefined); setError(""); }} /><Button label={inQuickRoom(call, name) ? "Leave and rename" : "Save meeting name"} onClick={rename} /></div></form>
             : <div className="meeting-room-setting-row"><Icon name="headphones" /><span>{name}</span><Button label={`Rename ${name}`} icon="settings" iconOnly variant="ghost" onClick={() => { setEditing({ original: name, name }); setRemoving(undefined); setError(""); }} /><Button label={`Remove ${name}`} icon="remove" iconOnly variant="ghost" onClick={() => { setRemoving(name); setEditing(undefined); setError(""); }} /></div>}
-          {removing === name && <div className="meeting-room-removal" role="group" aria-label={`Remove ${name} shortcut`}><p>Remove this shortcut? Its text conversation and other participants are unaffected.{inQuickRoom(call, name) ? " You will leave the current call." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel removal" variant="ghost" onClick={() => setRemoving(undefined)} /><Button label="Remove channel shortcut" danger onClick={() => remove(name)} /></div></div>}
+          {removing === name && <div className="meeting-room-removal" role="group" aria-label={`Remove ${name} shortcut`}><p>Remove this shortcut? Its text conversation and other participants are unaffected.{inQuickRoom(call, name) ? " You will leave the current call." : ""}</p><div className="meeting-setting-actions"><Button label="Cancel removal" variant="ghost" onClick={() => setRemoving(undefined)} /><Button label="Remove temporary meeting" danger onClick={() => remove(name)} /></div></div>}
         </div>)}
       </div>
     </div>;
@@ -606,7 +606,7 @@ export function apply(ctx: Context) {
             : person ? <div className={`meeting-focused-screen${person.video ? "" : " meeting-focused-person"}`}>{person.video ? <Video stream={person.video} label={`${person.name}’s camera on stage`} /> : <Avatar person={person} large />}<span className="text-body-sm">{person.name}</span><Button label="Back to participants" variant="ghost" onClick={() => chooseStage("participants")} /></div>
             : allScreens ? <div className="meeting-screen-grid">{call.screens.map(screen => <button type="button" className="meeting-screen-tile" key={screen.id} aria-label={`Focus ${screen.presenter}’s screen`} onClick={() => chooseStage(`screen:${screen.id}`)}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></button>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div>
             : remoteScreen ? <div className="meeting-focused-screen"><Video stream={remoteScreen} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen <span className="meeting-live">Live</span></span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select>{fullscreen}<Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
-            : call.participants.length ? <Roster call={call} tiles /> : call.phase === "connecting" ? <div className="meeting-empty" role="status"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Joining {call.roomName}…</h3><p className="text-body-sm text-subtle">Connecting to the room and preparing your microphone.</p><Button label="Cancel joining" icon="close" onClick={() => media.leave()} /></div> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Start a meeting to talk, share a screen, or work through something together."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage voice channels"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Join with your saved audio settings.</span>}</div>}
+            : call.participants.length ? <Roster call={call} tiles /> : call.phase === "connecting" ? <div className="meeting-empty" role="status"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Joining {call.roomName}…</h3><p className="text-body-sm text-subtle">Connecting to the room and preparing your microphone.</p><Button label="Cancel joining" icon="close" onClick={() => media.leave()} /></div> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Start a meeting to talk, share a screen, or work through something together."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage temporary meetings"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Join with your saved audio settings.</span>}</div>}
           {fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}
         </div>
         {call.phase !== "idle" && (focused || call.streams.length > 0 || !!call.sharing) && <Filmstrip call={call} people={focused} />}
@@ -620,7 +620,7 @@ export function apply(ctx: Context) {
     return <div className="meeting-toolbar" data-buzz-ui=""><Button label={call.roomName || "Meetings"} icon="headphones" variant="ghost" onClick={returnToCall} /><Controls call={call} compact /></div>;
   }
   ctx.settingsCards.register({ id: "connection", title: "Meetings", component: Settings });
-  ctx.settingsCards.register({ id: "rooms", title: "Voice channels", component: RoomManagement });
+  ctx.settingsCards.register({ id: "rooms", title: "Temporary meetings", component: RoomManagement });
   const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="' + glyphs.meetings + '"/></svg>')}`;
   ctx.pages.register({ id: "meeting", title: "Meetings", primary: true, placement: "dock", icon, layout: "workspace", route: { version: 1, validate: workspaces.validRoute }, component: Page, sidebar: Sidebar });
   ctx.panels.register({ id: "meeting-call", title: "Meeting", matches: () => false, component: () => <Page />, toolbar: Toolbar });
