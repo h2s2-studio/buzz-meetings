@@ -44,6 +44,12 @@ async function playback(locator) {
   await expect(locator).toBeVisible({ timeout: 15000 });
   await expect.poll(() => locator.evaluate(element => element.currentTime)).toBeGreaterThan(0);
 }
+// Library groups notes, documents & boards and meeting records behind one workspace tab.
+async function library(scope, name) {
+  await scope.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Library", exact: true }).click();
+  await scope.getByRole("group", { name: "Library" }).getByRole("button", { name, exact: typeof name === "string" }).click();
+}
+
 test("automatically presents rooms, persists names, and reports denied microphone permission", async ({ page }) => {
   await page.goto(`${fixture}?deny`);
   await expect(sidebar(page).getByRole("heading", { name: "Meetings" })).toBeVisible();
@@ -149,7 +155,7 @@ test("shares persistent workspace notes, messages and stable identity across ind
     await expect(second.getByLabel("Shared notes")).toHaveValue("");
     await second.getByRole("button", { name: "Load current notes", exact: true }).click();
     await expect(second.getByLabel("Shared notes")).toHaveValue("Agenda: retain the design rationale and decisions.");
-    for (const client of [page, second]) await client.getByRole("button", { name: "Chat & files", exact: true }).click();
+    for (const client of [page, second]) await client.getByRole("button", { name: "Chat", exact: true }).click();
     await page.getByRole("textbox", { name: "Room message" }).fill("Reference file: https://example.com/design.pdf");
     await page.getByRole("textbox", { name: "Room message" }).press("Enter");
     await expect(second.getByRole("region", { name: "Native conversation" })).toContainText("https://example.com/design.pdf");
@@ -164,14 +170,14 @@ test("shares persistent workspace notes, messages and stable identity across ind
       await expect(workspace(client).locator(":scope > header").getByRole("heading", { name: "Planning", exact: true })).toBeVisible();
       await expect(client.getByRole("region", { name: "Native Canvas" })).toHaveAttribute("data-channel", general);
       await expect(client.getByLabel("Shared notes")).toHaveValue("Agenda: retain the design rationale and decisions.");
-      await client.getByRole("button", { name: "Chat & files", exact: true }).click();
+      await client.getByRole("button", { name: "Chat", exact: true }).click();
       await expect(client.getByRole("region", { name: "Native conversation" })).toContainText("https://example.com/design.pdf");
       expect(await client.evaluate(() => meetingTest.microphoneRequests())).toBe(0);
     }
     const evidence = await page.evaluate(() => meetingTest.workspaceControl({}));
     expect(evidence.events).toHaveLength(1); expect(evidence.publications).toHaveLength(1);
     expect(evidence.events[0].tags).toContainEqual(["h", general]);
-    if (info.project.name === "chromium") { await page.getByRole("button", { name: "Notes", exact: true }).click(); await page.screenshot({ path: "docs/screenshots/meetings-workspace.png", fullPage: true }); }
+    if (info.project.name === "chromium") { await library(page, "Notes"); await page.screenshot({ path: "docs/screenshots/meetings-workspace.png", fullPage: true }); }
   } finally { await other.close(); }
 });
 
@@ -196,7 +202,7 @@ test("honors read-only guests and revocation while keeping conflicting notes dra
     await expect(workspace(second).getByText("Read only", { exact: true })).toBeVisible();
     await expect(second.getByLabel("Shared notes")).toHaveAttribute("readonly", "");
     await expect(second.getByRole("button", { name: "Save notes", exact: true })).toBeDisabled();
-    await second.getByRole("button", { name: "Chat & files", exact: true }).click();
+    await second.getByRole("button", { name: "Chat", exact: true }).click();
     await expect(second.getByRole("textbox", { name: "Room message" })).toBeDisabled();
     await page.evaluate(({ id, viewer }) => meetingTest.workspaceControl({ grant: { id, viewer, role: null } }), { id: general, viewer: identities.Riley });
     await expect(workspace(second)).toContainText("workspace is unavailable");
@@ -421,7 +427,7 @@ test("keeps a workspace transcript recoverable after leaving and rejoining, and 
   const view = workspace(page), tabs = view.getByRole("group", { name: "Workspace views" }), callbar = view.getByRole("group", { name: "Meeting controls" });
   await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
   await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
-  await tabs.getByRole("button", { name: "Transcript", exact: true }).click();
+  await callbar.getByRole("button", { name: "Transcript", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   const entries = panel.getByRole("region", { name: "Transcript entries" }).getByRole("listitem");
   await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(0);
@@ -457,7 +463,7 @@ test("keeps a workspace transcript recoverable after leaving and rejoining, and 
   expect(saved).toHaveLength(2);
   for (const record of saved) { expect(record.tags).toContainEqual(["h", general]); expect(record.value.callId).toMatch(/^RM_/); }
   expect(saved.map(record => record.value.covers.count).sort((a, b) => a - b)).toEqual([savedCount, spoken]);
-  await tabs.getByRole("button", { name: "Meeting records", exact: true }).click();
+  await library(view, "Meeting records");
   await expect(view.getByRole("region", { name: "Saved meeting records" }).getByRole("button")).toHaveCount(2);
   await ended.getByRole("button", { name: "Close transcript", exact: true }).click();
   await expect(ended).toHaveCount(0);
@@ -498,7 +504,7 @@ test("shows who is in a workspace call before joining, with an audio check and n
     await Promise.all([page.goto(`${fixture}?realm=${realm}&viewer=Alex`), riley.goto(`${fixture}?realm=${realm}&viewer=Riley`)]);
     await linkGeneral(page);
     const view = workspace(page);
-    await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Home", exact: true })).toHaveAttribute("aria-pressed", "true");
     // Before voice is enabled nothing is known, so the Overview does not claim the call is empty.
     await expect(view.getByRole("heading", { name: "Who’s in the call" })).toBeVisible({ timeout: 15000 });
     await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
@@ -508,7 +514,7 @@ test("shows who is in a workspace call before joining, with an audio check and n
     const rileyView = workspace(riley);
     await rileyView.getByRole("button", { name: "Join voice", exact: true }).click();
     await expect(rileyView.getByRole("group", { name: "Meeting controls" }).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
-    await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true }).click();
+    await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Home", exact: true }).click();
     await expect(view.getByRole("heading", { name: "A call is in progress" })).toBeVisible({ timeout: 30000 });
     await expect(view.getByRole("region", { name: "In the call" })).toContainText("Riley");
     await expect(view.getByRole("status").filter({ hasText: /updated (just now|\d+ s ago)/ })).toBeVisible();
@@ -542,17 +548,17 @@ test("edits a document beside the live stage, then reopens it from the meeting r
   await expect(edit).toHaveAttribute("aria-pressed", "true");
   await expect(callbar.getByRole("button", { name: "Leave room", exact: true })).toBeVisible();
   if (info.project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-edit-together.png" });
-  await tabs.getByRole("button", { name: "Transcript", exact: true }).click();
+  await callbar.getByRole("button", { name: "Transcript", exact: true }).click();
   const transcript = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   await expect.poll(() => transcript.getByRole("region", { name: "Transcript entries" }).getByRole("listitem").count(), { timeout: 45000 }).toBeGreaterThan(0);
   // A later edit after the record is saved: "As presented" stays at the saved revision.
   await transcript.getByRole("button", { name: "Save meeting record", exact: true }).click();
   await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
-  await tabs.getByRole("button", { name: "Voice", exact: true }).click();
+  await tabs.getByRole("button", { name: "Call", exact: true }).click();
   await pane.getByLabel("Paragraph 1", { exact: true }).fill("Move the marker out of the shadow.");
   await expect(pane.getByRole("status").filter({ hasText: "Saved · revision 4" })).toBeVisible();
   await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
-  await tabs.getByRole("button", { name: "Meeting records", exact: true }).click();
+  await library(view, "Meeting records");
   const records = view.getByRole("region", { name: "Saved meeting records" });
   await records.getByRole("button", { name: /General Voice/ }).click();
   const made = records.getByRole("region", { name: "Made in this meeting" });
@@ -582,7 +588,7 @@ test("keeps a same-name quick room and workspace distinct across selection, rena
   // Return from Messages lands on the workspace call, not the same-name quick room.
   await page.getByRole("button", { name: "Messages", exact: true }).click();
   await page.getByRole("toolbar", { name: "Buzz toolbar" }).getByRole("button", { name: "General Voice", exact: true }).click();
-  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Voice", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Call", exact: true })).toHaveAttribute("aria-pressed", "true");
   // Renaming the quick shortcut never leaves the workspace call.
   await manageTemporary(page);
   await page.getByRole("button", { name: "Rename General Voice", exact: true }).click();
@@ -801,7 +807,7 @@ test("completes a task after the agent stops listening and opens its result from
   await expect(transcript).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
   await rail(page, "Chat");
   await linkGeneral(page);
-  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  await library(workspace(page), "Meeting records");
   const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
   await records.getByRole("button", { name: /General Voice/ }).click();
   const results = records.getByRole("list", { name: "Meeting results" });
@@ -1044,7 +1050,7 @@ test("activates before a community is selected and binds workspaces and records 
   await expect(sidebar(page).getByRole("heading", { name: "Meetings" })).toBeVisible();
   await page.evaluate(() => meetingTest.selectCommunity());
   await linkGeneral(page);
-  await workspace(page).getByRole("button", { name: "Meeting records", exact: true }).click();
+  await library(workspace(page), "Meeting records");
   const records = workspace(page).getByRole("region", { name: "Saved meeting records" });
   await expect(records).toContainText("Save a transcript during or after a call");
   await expect(records.getByRole("alert")).toHaveCount(0);
@@ -1076,7 +1082,7 @@ test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compa
   await page.goto(`${fixture}?realm=documents`);
   await linkGeneral(page);
   const view = workspace(page);
-  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ }).click();
+  await library(view, /^Documents & boards/);
   const list = view.getByRole("region", { name: "Documents and boards" });
   await expect(list.getByRole("note")).toContainText("Preview: documents aren’t saved to Buzz yet.");
   await list.getByRole("button", { name: "New document", exact: true }).click();
@@ -1114,7 +1120,7 @@ test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compa
   await editor.getByRole("button", { name: "Close", exact: true }).click();
   await expect.poll(() => page.evaluate(() => meetingTest.documents()[0].texts.at(-1))).toBe("Next session");
   await expect(list.getByRole("button", { name: /Turn 3 playtest brief/ })).toContainText("Document · revision");
-  await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ })).toContainText("Preview");
+  await expect(view.getByRole("group", { name: "Library" }).getByRole("button", { name: /^Documents & boards/ })).toContainText("Preview");
 });
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);
