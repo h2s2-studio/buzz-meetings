@@ -3,8 +3,8 @@
 import { build } from "esbuild";
 import { WorkspaceHost, client, identities, general } from "./workspace-host.mjs";
 const bundle = async entry => { const built = await build({ entryPoints:[entry],bundle:true,format:"esm",platform:"node",write:false }); return import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`); };
-const [{ makeMeetingTranscription }, { makeLiveAgents }, { meetingRecords }] = await Promise.all(["src/meeting-transcription.ts","src/live-agents.ts","src/meeting-records.ts"].map(bundle));
-export { general, identities };
+const [{ makeMeetingTranscription }, { makeLiveAgents }, { meetingRecords, covers }] = await Promise.all(["src/meeting-transcription.ts","src/live-agents.ts","src/meeting-records.ts"].map(bundle));
+export { general, identities, covers };
 const hex = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2,"0")).join("");
 export const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 export function meetingFlow({ host = new WorkspaceHost(), viewer = identities.Alex } = {}) {
@@ -35,8 +35,9 @@ export function meetingFlow({ host = new WorkspaceHost(), viewer = identities.Al
   const records = meetingRecords(relay, connection.storage);
   let seq = 0, stream = "stream-" + hex().slice(0, 8);
   Object.assign(flow, { host, connection, agent, sent, published, tools, transcript, agents, records, media, announcements,
-    join(occurrenceId, roomName = "General Voice") { call = { ...call, phase: "connected", joinId: crypto.randomUUID(), occurrenceId, roomName }; seq = 0; stream = "stream-" + hex().slice(0, 8); for (const fn of [...mediaListeners]) fn(); },
-    leave() { call = { ...call, phase: "idle", joinId: undefined, occurrenceId: undefined, roomName: undefined }; for (const fn of [...mediaListeners]) fn(); },
+    join(occurrenceId, { roomName = "General Voice", channelId, keepStream = false } = {}) { call = { ...call, phase: "connected", joinId: crypto.randomUUID(), occurrenceId, roomName, workspaceChannelId: channelId }; if (!keepStream) { seq = 0; stream = "stream-" + hex().slice(0, 8); } for (const fn of [...mediaListeners]) fn(); },
+    setOccurrence(occurrenceId) { call = { ...call, occurrenceId }; for (const fn of [...mediaListeners]) fn(); },
+    leave() { call = { ...call, phase: "idle", joinId: undefined, occurrenceId: undefined, roomName: undefined, workspaceChannelId: undefined }; for (const fn of [...mediaListeners]) fn(); },
     speak(...lines) { receive?.({ streamId: stream, callId: call.occurrenceId, phase: "active", gap: false, dropped: 0, error: "", metrics: { subscribers: 1, sources: 1, queued: 0, jobs: 0, delayMs: 0 },
       segments: lines.map(([speakerId, speakerName, text]) => ({ seq: ++seq, speakerId, speakerName, text, startedAt: 1_700_000_000_000 + seq * 1000, endedAt: 1_700_000_000_500 + seq * 1000 })) }); },
     addAgent(mode = "act") { return agents.start({ channelId: general, roomName: call.roomName, pubkey: agent.pubkey, mode, mission: "Help the meeting." }); },

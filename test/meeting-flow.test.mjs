@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { meetingFlow, general } from "./meeting-flow.mjs";
+import { meetingFlow, general, covers } from "./meeting-flow.mjs";
 
 test("a later call in the same workspace never inherits an earlier call's tasks", async () => {
   const flow = meetingFlow();
@@ -57,5 +57,46 @@ test("a task finished after listening stops updates the meeting and keeps its th
   assert.equal(task.status, "done");
   assert.equal(task.messageId, flow.published.at(-1).id);
   assert.deepEqual(task.author, { pubkey: flow.agent.pubkey, name: "Studio" });
+  flow.close();
+});
+
+test("a save covers only the entries it contains, so later speech stays unsaved", async () => {
+  const flow = meetingFlow();
+  flow.join("RM_cover", { channelId: general }); await flow.transcript.start();
+  flow.speak(["alex-1", "Alex", "First point."], ["riley-1", "Riley", "Second point."]);
+  await flow.records.save(general, flow.transcript.snapshot(), flow.agents);
+  const saved = () => flow.records.snapshot().records.map(record => record.value);
+  assert.ok(saved().some(record => covers(record, general, flow.transcript.snapshot())));
+  flow.speak(["alex-1", "Alex", "Said after saving."]);
+  flow.leave();
+  assert.equal(saved().some(record => covers(record, general, flow.transcript.snapshot())), false);
+  // A record for another channel or another call never counts.
+  assert.equal(saved().some(record => covers(record, "10000000-0000-4000-8000-000000000002", flow.transcript.snapshot())), false);
+  await flow.records.save(general, flow.transcript.snapshot(), flow.agents);
+  assert.ok(saved().some(record => covers(record, general, flow.transcript.snapshot())));
+  flow.close();
+});
+
+test("rejoining keeps the earlier unsaved transcript reviewable and savable under its occurrence", async () => {
+  const flow = meetingFlow();
+  flow.join("RM_first", { channelId: general }); await flow.transcript.start();
+  flow.speak(["alex-1", "Alex", "Before the drop."]);
+  flow.leave();
+  flow.join("RM_first", { channelId: general, keepStream: true }); await flow.transcript.start();
+  flow.speak(["alex-1", "Alex", "After rejoining."]);
+  const [earlier] = flow.transcript.snapshot().retained;
+  assert.deepEqual(earlier.segments.map(row => row.text), ["Before the drop."]);
+  assert.equal(earlier.occurrenceId, "RM_first"); assert.equal(earlier.channelId, general); assert.equal(earlier.phase, "ended");
+  assert.deepEqual(flow.transcript.snapshot().segments.map(row => row.text), ["After rejoining."]);
+  await flow.records.save(general, earlier, flow.agents);
+  const [record] = flow.records.snapshot().records;
+  assert.equal(record.value.callId, "RM_first"); assert.ok(covers(record.value, general, earlier));
+  flow.transcript.discard(earlier.joinId);
+  assert.deepEqual(flow.transcript.snapshot().retained, []);
+  assert.equal(flow.transcript.snapshot().segments.length, 1);
+  // Changing identity or community clears everything.
+  flow.leave(); flow.join("RM_second", { channelId: general }); await flow.transcript.start(); flow.speak(["alex-1", "Alex", "x"]);
+  flow.leave(); flow.join("RM_third"); assert.equal(flow.transcript.snapshot().retained.length, 2);
+  flow.transcript.reset(); assert.deepEqual(flow.transcript.snapshot().retained, []);
   flow.close();
 });

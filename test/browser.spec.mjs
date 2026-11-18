@@ -404,9 +404,9 @@ async function proxyWorkspaceVoice(page) {
     });
   });
 }
-test("keeps a workspace transcript recoverable after leaving and saves it to the original channel without rejoining", async ({ page }, info) => {
+test("keeps a workspace transcript recoverable after leaving and rejoining, and only treats it as saved when a record covers it", async ({ page }, info) => {
   test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for the ended-call transcript");
-  test.setTimeout(120000);
+  test.setTimeout(180000);
   await proxyWorkspaceVoice(page);
   await page.goto(`${fixture}?realm=ended-${info.project.name}&speech&viewer=Alex`);
   await linkGeneral(page);
@@ -417,12 +417,18 @@ test("keeps a workspace transcript recoverable after leaving and saves it to the
   const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
   const entries = panel.getByRole("region", { name: "Transcript entries" }).getByRole("listitem");
   await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(0);
-  const spoken = await entries.count();
+  // Save mid-call, then keep talking: the later speech is not covered by that save.
+  await panel.getByRole("button", { name: "Save meeting record", exact: true }).click();
+  await expect(panel).toContainText("Saved in this workspace’s Meeting records.", { timeout: 15000 });
+  const savedCount = await entries.count();
+  await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(savedCount);
+  await expect(panel).not.toContainText("Saved in this workspace’s Meeting records.");
   // Leave while viewing the transcript.
   await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
   const ended = view.getByRole("group", { name: "Ended call" });
   await expect(ended.getByRole("status")).toHaveText("The call ended. Its transcript isn’t saved yet.");
-  await expect.poll(() => entries.count()).toBeGreaterThanOrEqual(spoken);
+  const spoken = await entries.count();
+  expect(spoken).toBeGreaterThan(savedCount);
   // Rename the workspace meanwhile: the record must still bind to the original channel.
   await page.getByRole("button", { name: "Workspace settings", exact: true }).click();
   await page.getByRole("button", { name: "Rename workspace General Voice", exact: true }).click();
@@ -430,18 +436,24 @@ test("keeps a workspace transcript recoverable after leaving and saves it to the
   await page.getByRole("button", { name: "Save workspace name", exact: true }).click();
   await page.getByRole("button", { name: "Meetings", exact: true }).click();
   await workspaces(page).getByRole("button", { name: "Playtest review", exact: true }).click();
+  // Rejoining keeps the earlier transcript.
+  await view.getByRole("button", { name: "Join voice", exact: true }).click();
+  await expect(callbar.getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+  await expect(ended.getByRole("status")).toHaveText("An earlier call’s transcript isn’t saved yet.");
   await ended.getByRole("button", { name: "Review and save", exact: true }).click();
+  await expect(entries).toHaveCount(spoken);
   await panel.getByRole("button", { name: "Save meeting record", exact: true }).click();
-  await expect(ended.getByRole("status")).toHaveText("This call’s transcript is saved in Meeting records.", { timeout: 15000 });
+  await expect(ended.getByRole("status")).toHaveText("An earlier call’s transcript is saved in Meeting records.", { timeout: 15000 });
   const evidence = await page.evaluate(() => meetingTest.workspaceControl({}));
-  const record = evidence.events.find(event => event.tags.some(tag => tag[0] === "type" && tag[1] === "studio.h2s2.meetings.record"));
-  expect(record.tags).toContainEqual(["h", general]);
-  expect(JSON.parse(record.content).callId).toMatch(/^RM_/);
+  const saved = evidence.events.filter(event => event.tags.some(tag => tag[0] === "type" && tag[1] === "studio.h2s2.meetings.record")).map(event => ({ tags: event.tags, value: JSON.parse(event.content) }));
+  expect(saved).toHaveLength(2);
+  for (const record of saved) { expect(record.tags).toContainEqual(["h", general]); expect(record.value.callId).toMatch(/^RM_/); }
+  expect(saved.map(record => record.value.covers.count).sort((a, b) => a - b)).toEqual([savedCount, spoken]);
   await tabs.getByRole("button", { name: "Meeting records", exact: true }).click();
-  await expect(view.getByRole("region", { name: "Saved meeting records" }).getByRole("button")).toHaveCount(1);
+  await expect(view.getByRole("region", { name: "Saved meeting records" }).getByRole("button")).toHaveCount(2);
   await ended.getByRole("button", { name: "Close transcript", exact: true }).click();
   await expect(ended).toHaveCount(0);
-  expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual(["ended"]);
+  await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
 });
 test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);

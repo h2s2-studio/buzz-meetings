@@ -20,7 +20,11 @@ export type MeetingTranscriptState = {
   sharedCallId?: string;
   sharedCursor?: number;
   metrics?: { subscribers: number; sources: number; queued: number; jobs: number; delayMs: number };
+  /** Earlier joins' transcripts kept after a rejoin until each is saved or discarded. */
+  retained: readonly RetainedTranscript[];
 };
+export type RetainedTranscript = Pick<MeetingTranscriptState, "joinId" | "occurrenceId" | "channelId" | "roomName" | "segments" | "base" | "warning" | "sharedStreamId" | "sharedCallId"> & { phase: "ended"; error: ""; retained: readonly [] };
+const retainLimit = 8;
 type Media = Pick<ReturnType<typeof makeRoomSession>, "snapshot" | "subscribe" | "transcribe" | "captions" | "setTranscribing">;
 type Run = {
   joinId: string;
@@ -34,7 +38,7 @@ type Run = {
 // One transcription stream per local call, independent of chat access or agents.
 export function makeMeetingTranscription(media: Media, audioContext = () => new AudioContext()) {
   const listeners = new Set<() => void>();
-  let state: MeetingTranscriptState = { phase: "idle", error: "", segments: [], base: 0, warning: "" };
+  let state: MeetingTranscriptState = { phase: "idle", error: "", segments: [], base: 0, warning: "", retained: [] };
   let active: Run | undefined;
   // Who asked for capture on this join: "user" or an agent's start attempt. Capture
   // stops when the last interest is released; an explicit pause clears them all.
@@ -52,17 +56,32 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     }
     emit({ phase: error ? "error" : phase, error });
   }
-  function reset() {
+  function clearCurrent() {
     stop();
     emit({ phase: "idle", joinId: undefined, occurrenceId: undefined, channelId: undefined, roomName: undefined, error: "", segments: [], base: 0, warning: "", sharedStreamId: undefined, sharedCallId: undefined, sharedCursor: undefined, metrics: undefined });
   }
+  /** Clears everything, including retained transcripts (identity or community change, plugin close). */
+  function reset() { clearCurrent(); emit({ retained: [] }); }
+  /** Drops one transcript by join: a retained one, or the current one once its call has ended. */
+  function discard(joinId?: string) {
+    if (!joinId) return;
+    if (state.retained.some(item => item.joinId === joinId)) return emit({ retained: state.retained.filter(item => item.joinId !== joinId) });
+    if (state.joinId === joinId && !active && media.snapshot().joinId !== joinId) clearCurrent();
+  }
+  // A new join keeps the previous join's unsaved text reviewable instead of wiping it.
+  function retainCurrent() {
+    if (!state.segments.length) return;
+    const { joinId, occurrenceId, channelId, roomName, segments, base, warning, sharedStreamId, sharedCallId } = state;
+    emit({ retained: [...state.retained, { phase: "ended", error: "", retained: [], joinId, occurrenceId, channelId, roomName, segments, base, warning, sharedStreamId, sharedCallId } as RetainedTranscript].slice(-retainLimit) });
+  }
   function release(holder: string) {
-    if (!interests.delete(holder) || interests.size || !active) return;
+    if (!interests.delete(holder)) return;
+    if (interests.size || !active) return emit({});
     stop();
   }
   function start(holder = "user") {
     const call = media.snapshot();
-    if (active && active.joinId === call.joinId) { interests.add(holder); return active.ready ?? Promise.resolve(); }
+    if (active && active.joinId === call.joinId) { if (!interests.has(holder)) { interests.add(holder); emit({}); } return active.ready ?? Promise.resolve(); }
     if (call.phase !== "connected" || !call.joinId || !call.transcription) {
       emit({ error: call.phase !== "connected" ? "Join a voice room to start transcription." : "Transcription isn’t available on this meeting service." });
       return Promise.resolve();
@@ -72,6 +91,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
     try { if (!call.sharedTranscription) context = audioContext(); } catch { emit({ phase: "error", error: "Audio capture couldn’t start. Try transcription again." }); return Promise.resolve(); }
     const run: Run = { joinId: call.joinId, abort: new AbortController(), context };
     active = run;
+    if (state.joinId !== call.joinId) retainCurrent();
     emit({ phase: "starting", joinId: call.joinId, occurrenceId: call.occurrenceId, channelId: call.workspaceChannelId, roomName: call.roomName, error: "", ...(state.joinId !== call.joinId ? { segments: [] } : {}) });
     run.ready = (async () => {
       try {
@@ -122,7 +142,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
   const unsubscribe = media.subscribe(() => {
     const call = media.snapshot();
     if (call.joinId && call.joinId !== state.joinId) {
-      reset(); emit({ joinId: call.joinId, occurrenceId: call.occurrenceId, channelId: call.workspaceChannelId, roomName: call.roomName });
+      stop("", "ended"); retainCurrent(); clearCurrent(); emit({ joinId: call.joinId, occurrenceId: call.occurrenceId, channelId: call.workspaceChannelId, roomName: call.roomName });
     } else if (call.joinId && call.occurrenceId && call.occurrenceId !== state.occurrenceId) emit({ occurrenceId: call.occurrenceId });
     const run = active;
     if (!run) {
@@ -136,7 +156,7 @@ export function makeMeetingTranscription(media: Media, audioContext = () => new 
       if (state.phase !== phase) emit({ phase });
     }
   });
-  return { start, stop, release, reset, snapshot: () => state, holders: () => [...interests],
+  return { start, stop, release, reset, discard, snapshot: () => state, holders: () => [...interests],
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     close() { unsubscribe(); reset(); listeners.clear(); },
   };
