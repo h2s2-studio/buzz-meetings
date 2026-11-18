@@ -1,0 +1,6 @@
+{
+  "id": "studio.h2s2.meetings-gate0",
+  "name": "Meetings Gate 0 (test)",
+  "apiVersion": 1,
+  "description": "Test only: proves an agent can sign a channel artifact (kind 45010) and its owner can read it back and add a revision. Writes only to a channel named meetings-gate0-*."
+}
