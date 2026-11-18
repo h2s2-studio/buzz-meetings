@@ -32,7 +32,7 @@ type ActiveRoom = {
   transcription: boolean;
   sharedTranscription: boolean;
   transcribing?: boolean;
-  listener?: { name: string; mode: "act" | "assist"; agents?: { pubkey:string; name:string; mode:"act" | "assist" }[] };
+  listener?: { name: string; mode: "act" | "assist"; agents?: RemoteAgent[] };
   metadataUpdate?: Promise<void>;
   screenAudio: boolean;
   picking: boolean;
@@ -60,6 +60,22 @@ type ActiveRoom = {
   occurrenceId?: string;
   grid: Map<string, RemoteTrackPublication>;
 };
+/** An agent listening through a participant's client, as other clients see it (read-only). */
+export type RemoteAgent = { pubkey: string; name: string; mode?: "act" | "assist"; state?: "listening" | "working" | "needs-input" | "finished"; caption?: string; question?: { key: string; text: string; options: string[]; expiresAt: number; askedAt?: number } };
+// Metadata comes from other clients: keep only well-formed, bounded fields.
+function remoteAgent(value: Record<string, unknown>): RemoteAgent | undefined {
+  if (typeof value?.pubkey !== "string" || !/^[0-9a-f]{64}$/.test(value.pubkey) || typeof value.name !== "string" || value.name.length > 64) return;
+  const agent: RemoteAgent = { pubkey: value.pubkey, name: value.name };
+  if (value.mode === "act" || value.mode === "assist") agent.mode = value.mode;
+  if (["listening", "working", "needs-input", "finished"].includes(value.state as string)) agent.state = value.state as RemoteAgent["state"];
+  if (typeof value.caption === "string") agent.caption = value.caption.slice(0, 80);
+  const question = value.question as Record<string, unknown> | undefined;
+  if (question && typeof question.key === "string" && typeof question.text === "string" && Array.isArray(question.options) && Number.isSafeInteger(question.expiresAt)) {
+    const options = question.options.filter((option): option is string => typeof option === "string").slice(0, 4).map(option => option.slice(0, 40));
+    if (options.length >= 2) agent.question = { key: question.key.slice(0, 64), text: question.text.slice(0, 200), options, expiresAt: question.expiresAt as number, ...(Number.isSafeInteger(question.askedAt) ? { askedAt: question.askedAt as number } : {}) };
+  }
+  return agent;
+}
 export type AudioPreferences = { microphone: string; output: string; joinMuted: boolean };
 type Quality = VideoQuality | "auto";
 type Stream = { id: string; presenterId: string; presenter: string; muted: boolean };
@@ -88,7 +104,7 @@ export type RoomSnapshot = {
   layers: { value: VideoQuality; height: number }[];
   roomName?: string;
   workspaceChannelId?: string;
-  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; listeners?: { pubkey:string; name:string }[]; transcribing: boolean; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
+  participants: { id: string; name: string; picture?: string; local: boolean; listener?: string; listeners?: RemoteAgent[]; transcribing: boolean; speaking: boolean; muted: boolean; video?: MediaStream; audio?: MediaStream }[];
   muted: boolean;
   deafened: boolean;
   audioBlocked: boolean;
@@ -157,8 +173,8 @@ export function makeRoomSession() {
       watching: run.watching?.trackSid, video: run.remote, quality: run.quality, layers: available,
       roomName: run.roomName, workspaceChannelId: run.workspaceChannelId,
       participants: phase === "connecting" ? [] : [run.room.localParticipant, ...[...run.room.remoteParticipants.values()].filter(person => !person.identity.startsWith("transcription-"))].map((person: Participant) => {
-        let picture: string | undefined; let listener: string | undefined; let agentList: {pubkey:string; name:string}[] = []; let transcribing = false;
-        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; if (Array.isArray(metadata.liveAgents)) agentList = metadata.liveAgents.slice(0,4).filter((agent: {pubkey?:unknown; name?:unknown}) => typeof agent.pubkey === "string" && /^[0-9a-f]{64}$/.test(agent.pubkey) && typeof agent.name === "string" && agent.name.length <= 64); transcribing = metadata.liveTranscription === true; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
+        let picture: string | undefined; let listener: string | undefined; let agentList: RemoteAgent[] = []; let transcribing = false;
+        try { const metadata = JSON.parse(person.metadata || "{}"); picture = metadata.picture; if (Array.isArray(metadata.liveAgents)) agentList = metadata.liveAgents.slice(0,4).flatMap((agent: Record<string, unknown>) => { const value = remoteAgent(agent); return value ? [value] : []; }); transcribing = metadata.liveTranscription === true; if (typeof metadata.liveAgent?.name === "string") listener = metadata.liveAgent.name.slice(0,64); } catch { /* Guest without a picture. */ }
         const cameraTrack = person.isCameraEnabled ? person.getTrackPublication(Track.Source.Camera)?.videoTrack?.mediaStreamTrack : undefined;
         const previousPerson = snapshot.participants.find(item => item.id === person.identity);
         const previous = previousPerson?.video;

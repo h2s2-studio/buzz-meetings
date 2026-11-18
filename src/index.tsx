@@ -14,6 +14,7 @@ import { audioSettings } from "./audio-settings";
 import { cameraPermissions } from "./permissions";
 import { speakerLabels } from "./speaker-labels";
 import { agentIcon } from "./agent-icon";
+import { agentQuestionUI, type TileAgent } from "./agent-question-ui";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
 import { readable, type Channel } from "./workspaces";
@@ -99,16 +100,13 @@ export function apply(ctx: Context) {
   function setDocument(target?: OpenTarget) { documentTarget = target; publish(); }
   function openDocument(target: OpenTarget) { setDocument(target); workspaces.open(target.channelId, "documents"); }
   const artifactsFor = (channelId: string, occurrenceId?: string) => recordArtifacts(artifactStore, channelId, occurrenceId);
-  const Records = recordsUI(React, records, (channelId, messageId) => {
-    const live = ctx.relay.snapshot();
-    if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });
-  }, openDocument);
+  const Records = recordsUI(React, records, (channelId, messageId) => openResult(channelId, messageId), openDocument);
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel, artifacts: { artifactsFor } });
   function WorkspaceDocuments({ channelId }: { channelId: string }) { useUI(); return <documents.DocumentsTab channelId={channelId} target={documentTarget} setTarget={setDocument} />; }
   ctx.effect(() => () => { transcript.close(); records.close(); });
   const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, Documents: WorkspaceDocuments, documentsPreview: !artifactStore.durable, transcript, records,
     temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() },
-    presence: workspacePresence, AudioCheck: () => <audio.AudioSettings inline /> });
+    presence: workspacePresence, AudioCheck: () => <audio.AudioSettings inline />, openResult: (channelId, messageId) => openResult(channelId, messageId) });
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
   const storageKey = () => `studio.h2s2.meeting:${connection.scope || connection.origin}:${connection.viewer}:rooms`;
@@ -121,6 +119,8 @@ export function apply(ctx: Context) {
   let stageChoice = "participants";
   // Why the stage last changed without the viewer's own action (a share ended, a person left).
   let stageNotice = "";
+  // A message the side panel's Chat tab should open at (a result opened from a tile).
+  let chatTarget: { channelId: string; messageId: string } | undefined;
   let stagedLabel = "";
   let chatOpen = true;
   let shareSound = false;
@@ -286,9 +286,21 @@ export function apply(ctx: Context) {
       {source && source !== failed ? <img src={source} alt="" onError={() => setFailed(source)} /> : person.name.slice(0, 1).toLocaleUpperCase()}
     </span>;
   }
-  function includedAgents(call: RoomSnapshot) {
-    const people=[...(liveAgents.snapshot().members ?? []).map(agent=>({...agent,key:agent.sessionId})),...call.participants.filter(person=>!person.local).flatMap(person=>(person.listeners ?? []).map(agent=>({...agent,key:`${person.id}:${agent.pubkey}`,phase:"listening" as const})))];
+  // Agents this device runs (interactive) and agents seen through others' clients (read-only).
+  function includedAgents(call: RoomSnapshot): (TileAgent & { key: string; phase: "starting" | "listening"; channelId?: string })[] {
+    const people=[...(liveAgents.snapshot().members ?? []).map(agent=>({ key:agent.sessionId, pubkey:agent.pubkey, name:agent.name, phase:agent.phase, channelId:agent.channelId, local:true, status:agent.status, question:agent.question, suggestions:agent.suggestions })),
+      ...call.participants.filter(person=>!person.local).flatMap(person=>(person.listeners ?? []).map(agent=>({ key:`${person.id}:${agent.pubkey}`, pubkey:agent.pubkey, name:agent.name, phase:"listening" as const, local:false, status: agent.state ? { state:agent.state, caption:agent.caption ?? "" } : undefined, question:agent.question })))];
     return [...new Map(people.map(agent=>[agent.pubkey,agent])).values()];
+  }
+  const { AgentQuestion, AgentStatusLine } = agentQuestionUI(React, liveAgents, () => media.snapshot().participants.find(person => person.local)?.id);
+  const stateLabel = (agent: { phase: string; status?: TileAgent["status"] }) => agent.phase === "starting" ? "Joining" : ({ listening: "Listening", working: "Working", "needs-input": "Needs input", finished: "Finished" } as const)[agent.status?.state ?? "listening"];
+  /** Results open inside the call (its chat), never by leaving the Meetings page. */
+  function openResult(channelId: string, messageId: string) {
+    const call = media.snapshot();
+    if (call.phase !== "idle" && call.workspaceChannelId === channelId) { workspaces.open(channelId, "chat", messageId); return; }
+    if (call.phase !== "idle") { chatTarget = { channelId, messageId }; showPanel("chat"); open(); return; }
+    const live = ctx.relay.snapshot();
+    if (live.viewer && live.origin) void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, messageId });
   }
   function memberCount(call: RoomSnapshot) { return call.participants.length+includedAgents(call).length; }
   function TranscriptionNotice({call}: {call:RoomSnapshot}) {
@@ -312,7 +324,7 @@ export function apply(ctx: Context) {
         {!person.local && <ParticipantAudio person={{...person,name:personLabel(person)}} />}
         {call.streams.some(stream => stream.presenterId === person.id) && <span className="meeting-live">Live</span>}
       </li>)}
-      {agents.map(agent => <li key={agent.key} className="meeting-agent-roster"><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-avatar" data-large={tiles || undefined} aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button><span className="meeting-live">{agent.phase === "starting" ? "Joining" : "Listening"}</span></li>)}
+      {agents.map(agent => <li key={agent.key} className="meeting-agent-roster" data-state={agent.status?.state}><button type="button" className="meeting-person-pick buzz-button" data-buzz-ui="" data-variant="ghost" aria-label={`${agent.name} · ${stateLabel(agent)}`} onClick={openAgents}><span className="meeting-avatar" data-large={tiles || undefined} aria-hidden="true"><Icon name="agent" /></span><span className="meeting-person-name">{agent.name}</span></button>{tiles ? agent.question ? <AgentQuestion agent={agent} /> : <AgentStatusLine agent={agent} openResult={agent.channelId ? messageId => openResult(agent.channelId!, messageId) : undefined} /> : <span className="meeting-live">{stateLabel(agent)}</span>}</li>)}
     </ul>{!tiles && call.phase === "connected" && <Button label="Add agent" icon="plus" onClick={openAgents} />}</>;
   }
   function ParticipantAudio({ person }: { person: RoomSnapshot["participants"][number] }) {
@@ -546,7 +558,7 @@ export function apply(ctx: Context) {
       finally { setPending(false); }
     }
     return <aside className="meeting-chat" aria-label="Room chat">
-      {chosen && roomPanel === "agents" ? <workspaces.Agents key={`${current.scope}:${chosen.id}`} channelId={chosen.id} roomName={room} /> : chosen && Workspace && current.scope ? <div className="meeting-chat-workspace"><Workspace key={`${current.scope}:${chosen.id}`} id="meetings-room-chat" session={session} scope={current.scope} target={{ channelId: chosen.id }} label={`${room} chat`} actions={[savedWorkspaces.workspaces.some(item => item.id === chosen.id) ? { label: "Open workspace", run: () => workspaces.open(chosen.id) } : { label: "Save as shared workspace", run: () => workspaces.manage(chosen.id) }]} /></div>
+      {chosen && roomPanel === "agents" ? <workspaces.Agents key={`${current.scope}:${chosen.id}`} channelId={chosen.id} roomName={room} /> : chosen && Workspace && current.scope ? <div className="meeting-chat-workspace"><Workspace key={`${current.scope}:${chosen.id}:${chatTarget?.channelId === chosen.id ? chatTarget.messageId : ""}`} id="meetings-room-chat" session={session} scope={current.scope} target={{ channelId: chosen.id, ...(chatTarget?.channelId === chosen.id ? { messageId: chatTarget.messageId } : {}) }} label={`${room} chat`} actions={[savedWorkspaces.workspaces.some(item => item.id === chosen.id) ? { label: "Open workspace", run: () => workspaces.open(chosen.id) } : { label: "Save as shared workspace", run: () => workspaces.manage(chosen.id) }]} /></div>
         : <><header className="panel-header"><div className="panel-header-label"><Icon name="chat" /><h2>Room chat</h2></div></header><div className="meeting-chat-setup text-body-sm">
           {!Workspace ? <p>Turn on Channels to use Buzz’s room conversation here.</p> : <><p className="text-subtle">Keep the conversation going alongside {room}.</p>
             <label>Room conversation<select className="buzz-input" disabled={pending} value="" onChange={event => link(event.target.value)}><option value="">Choose a joined channel…</option>{channels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label>
@@ -569,7 +581,7 @@ export function apply(ctx: Context) {
     const working = listening.members?.find(member => member.phase === "listening");
     return <section className="meeting-page text-body" data-buzz-ui="" aria-label="Meeting">
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><span className="panel-header-label-icon"><Icon name={state.selected ? "headphones" : "meetings"} /></span><h2>{call.roomName || state.selected || "Meetings"}</h2><span className="meeting-header-count text-caption text-metadata">{people ? `${people} in call${agents ? ` · ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}` : state.selected ? "Temporary meeting" : ""}</span></div></div>
-        <div className="panel-header-actions">{working && <span className="meeting-agent-pill text-caption" role="status"><Icon name="agent" />{working.name} is listening</span>}{!state.chatOpen && !!(call.roomName || state.selected) && <Button ref={panelTrigger} label="Open side panel" icon="chat" variant="ghost" onClick={() => setChatOpen(true)} />}{call.phase === "idle" && <audio.AudioSettings />}</div>
+        <div className="panel-header-actions">{working && <span className="meeting-agent-pill text-caption" role="status"><Icon name="agent" />{working.name} {({ listening: "is listening", working: `is working on “${working.status.caption}”`, "needs-input": "needs your input", finished: `finished “${working.status.caption}”` } as const)[working.status.state]}</span>}{!state.chatOpen && !!(call.roomName || state.selected) && <Button ref={panelTrigger} label="Open side panel" icon="chat" variant="ghost" onClick={() => setChatOpen(true)} />}{call.phase === "idle" && <audio.AudioSettings />}</div>
       </header>
       {(state.error || call.error) && <div className="meeting-error text-body-sm" role="alert"><span>{state.error || call.error}</span>{state.error && <Button label="Connection settings" variant="ghost" onClick={openSettings} />}</div>}
       <MeetingBody closePanel={() => { setChatOpen(false); requestAnimationFrame(() => panelTrigger.current?.focus()); }} />
@@ -612,7 +624,7 @@ export function apply(ctx: Context) {
       {call.streams.map(stream => <li className="meeting-film-tile" data-kind="screen" key={stream.id}><button type="button" className="meeting-film-pick" aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={state.stageChoice === `screen:${stream.id}`} disabled={!connected} onClick={() => chooseStage(`screen:${stream.id}`)}><span className="meeting-film-glyph"><Icon name="screen" /></span><span className="meeting-film-caption"><span className="meeting-film-name">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></span></button></li>)}
       {call.streams.length > 1 && <li className="meeting-film-tile" data-kind="screen"><button type="button" className="meeting-film-pick" aria-label="Watch all screens" aria-pressed={state.stageChoice === "all-screens"} onClick={() => chooseStage("all-screens")}><span className="meeting-film-glyph"><Icon name="expand" /></span><span className="meeting-film-caption"><span className="meeting-film-name">All screens</span></span></button></li>}
       {people && call.participants.map(person => <li className="meeting-film-tile" data-speaking={person.speaking || undefined} key={person.id}><button type="button" className="meeting-film-pick" aria-label={`Show ${label(person)}${person.local ? " (you)" : ""} on stage`} aria-pressed={state.stageChoice === `person:${person.id}`} onClick={() => chooseStage(`person:${person.id}`)}>{person.video ? <Video stream={person.video} label={`${person.name}’s camera`} /> : <span className="meeting-film-glyph"><Avatar person={person} large /></span>}<span className="meeting-film-caption"><span className="meeting-film-name">{label(person)}{person.local ? " (you)" : ""}</span>{person.muted && <span className="meeting-muted" title="Muted"><Icon name="microphoneOff" /><span className="sr-only">Muted</span></span>}</span></button></li>)}
-      {people && agents.map(agent => <li className="meeting-film-tile" data-kind="agent" key={agent.key}><button type="button" className="meeting-film-pick" aria-label={`${agent.name} · ${agent.phase === "starting" ? "Joining" : "Listening"}`} onClick={openAgents}><span className="meeting-film-glyph"><Icon name="agent" /></span><span className="meeting-film-caption"><span className="meeting-film-name">{agent.name}</span><span className="meeting-film-state">{agent.phase === "starting" ? "Joining" : "Listening"}</span></span></button></li>)}
+      {people && agents.map(agent => <li className="meeting-film-tile" data-kind="agent" data-state={agent.status?.state} key={agent.key}><button type="button" className="meeting-film-pick" aria-label={`${agent.name} · ${stateLabel(agent)}`} onClick={openAgents}><span className="meeting-film-glyph"><Icon name="agent" /></span><span className="meeting-film-caption"><span className="meeting-film-name">{agent.name}</span><span className="meeting-film-state">{stateLabel(agent)}</span></span></button><AgentQuestion agent={agent} compact /></li>)}
     </ul>;
   }
   function MeetingBody({ panels = true, closePanel }: { panels?: boolean; closePanel?: () => void }) {

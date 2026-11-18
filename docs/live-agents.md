@@ -117,3 +117,34 @@ agent/channel/community guards, task publication identity, and stopping capture
 without leaving voice. Agent runner calls are contract fixtures: native harness
 execution still requires a live test in Buzz. The worker also has to be deployed
 before the folder plugin can use it with a production room.
+
+## In the call, not in chat
+
+People in a call talk and watch. Chat is the record, never a required step.
+
+- **Questions:** an agent asks with `meetings_ask` (a question and 2–4 short
+  options). The question appears on the agent's tile, on the stage or in the
+  filmstrip, with a countdown. The owner answers by clicking, on the device that
+  runs the agent. Anyone can answer by saying an option. Other participants see
+  the question read-only through participant metadata.
+- **Spoken answers:** a plain spoken reply ("yeah, go ahead", or an option's
+  words) is offered to the agent as an unverified suggestion, with the words
+  heard and the speaker's media label. The agent decides. A spoken answer can
+  only settle a question the agent asked, within its existing role.
+- **Status and results:** the tile shows what the agent is doing (listening,
+  working, needs input, finished) from its latest task. **Open result** opens
+  the call's own chat at that message. Questions and answers are posted to the
+  assignment thread as the record.
+- **Not yet supported:** remote clicks. They need a data-channel grant from the
+  meeting service.
+
+### `meetings_ask`
+
+`meetings_ask { session_id, key, question (≤ 200), options (2–4, ≤ 40 each), timeout_seconds (15–600, default 120) }`
+
+- **Who can answer:** the agent's owner, by clicking on the device that runs the agent. That click is the only answer that settles the question as the owner's.
+- **Speech:** anyone may answer by speaking. A spoken match is a suggestion (`via: "speech", owner: false`), including the owner's own speech, because speaker labels are not verified. The tile then asks the owner to click to confirm.
+- **Spoken matching:** generic yes/no replies must be four words or fewer with nothing else in them. A reply naming an option's own words may be up to eight words.
+- **Bounds:** at most one suggestion per speaker per option and six per question. Speech wakes the agent at most once per 5 s. The thread gets one "Heard while asking …" summary per question.
+- **What speech can settle:** only a question the agent asked, within its existing role. It never grants new permission.
+- **Remote clicks:** other participants can't click to answer yet; that needs a data-channel grant from the meeting service.

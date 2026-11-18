@@ -22,7 +22,8 @@ export function meetingFlow({ host = new WorkspaceHost(), viewer = identities.Al
       sent.push(event); for (const observe of [...observers]) observe(event)?.(); return event.id;
     } },
   });
-  const runtime = { snapshot: () => ({ agents: [agent], running: flow.running ? [agent] : [] }), subscribe: () => () => {}, wake() {}, addInstructions() {}, addTool(tool) { tools.set(tool.name, tool); } };
+  const wakes = [];
+  const runtime = { snapshot: () => ({ agents: [agent], running: flow.running ? [agent] : [] }), subscribe: () => () => {}, wake(key, input) { wakes.push({ key, ...input }); }, addInstructions() {}, addTool(tool) { tools.set(tool.name, tool); } };
   let call = { phase: "idle", transcription: true, sharedTranscription: true, participants: [] }, receive;
   const media = {
     snapshot: () => call, subscribe(fn) { mediaListeners.add(fn); return () => mediaListeners.delete(fn); },
@@ -34,13 +35,19 @@ export function meetingFlow({ host = new WorkspaceHost(), viewer = identities.Al
   const agents = makeLiveAgents({ agents: runtime, relay, effect: setup => cleanups.push(setup()) }, media, transcript);
   const records = meetingRecords(relay, connection.storage);
   let seq = 0, stream = "stream-" + hex().slice(0, 8);
-  Object.assign(flow, { host, connection, agent, sent, published, tools, transcript, agents, records, media, announcements,
+  Object.assign(flow, { host, connection, agent, sent, published, tools, wakes, transcript, agents, records, media, announcements,
     join(occurrenceId, { roomName = "General Voice", channelId, keepStream = false } = {}) { call = { ...call, phase: "connected", joinId: crypto.randomUUID(), occurrenceId, roomName, workspaceChannelId: channelId }; if (!keepStream) { seq = 0; stream = "stream-" + hex().slice(0, 8); } for (const fn of [...mediaListeners]) fn(); },
     setOccurrence(occurrenceId) { call = { ...call, occurrenceId }; for (const fn of [...mediaListeners]) fn(); },
     leave() { call = { ...call, phase: "idle", joinId: undefined, occurrenceId: undefined, roomName: undefined, workspaceChannelId: undefined }; for (const fn of [...mediaListeners]) fn(); },
     speak(...lines) { receive?.({ streamId: stream, callId: call.occurrenceId, phase: "active", gap: false, dropped: 0, error: "", metrics: { subscribers: 1, sources: 1, queued: 0, jobs: 0, delayMs: 0 },
       segments: lines.map(([speakerId, speakerName, text]) => ({ seq: ++seq, speakerId, speakerName, text, startedAt: 1_700_000_000_000 + seq * 1000, endedAt: 1_700_000_000_500 + seq * 1000 })) }); },
     addAgent(mode = "act") { return agents.start({ channelId: general, roomName: call.roomName, pubkey: agent.pubkey, mode, mission: "Help the meeting." }); },
+    // Call any agent tool as the fixture agent in its assignment thread.
+    async tool(name, args) {
+      const state = agents.snapshot();
+      const agentClient = { key: agent.key, pubkey: agent.pubkey, owner: viewer, async publish(event) { const id = hex(); published.push({ ...event, id }); return { id }; } };
+      return JSON.parse(await tools.get(name).call(agentClient, { channel: general, root: sent.at(-1)?.id }, { session_id: state.sessionId, ...args }));
+    },
     async task(args) {
       const state = agents.snapshot();
       const agentClient = { key: agent.key, pubkey: agent.pubkey, owner: viewer, async publish(event) { const id = hex(); published.push({ ...event, id }); return { id }; } };
