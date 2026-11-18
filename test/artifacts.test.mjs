@@ -123,3 +123,25 @@ test("invalid content and operations are refused", () => {
   assert.throws(() => applyEdit(doc, edit(riley, rev(2), [{ type: "update", id: id(), fields: { text: "gone" } }])), ArtifactError);
   assert.throws(() => applyEdit(doc, edit(riley, rev(2), [{ type: "insert", node: { ...paragraph("x"), href: "javascript:alert(1)", type: "link" } }])), ArtifactError);
 });
+
+test("a connector or grouping to something the head removed restores it instead of failing", () => {
+  let board = createContent({ kind: "board", title: "Ideas", createdBy: agent });
+  const group = { id: id(), type: "group", text: "Visibility", x: 0, y: 0, w: 400, h: 300, author: agent, editedAt: 1 };
+  const marker = card("Move the marker", 10, 10), kerb = card("Kerb paint", 200, 10);
+  board = applyEdit(board, edit(agent, rev(1), [{ type: "insert", node: group }, { type: "insert", node: marker }, { type: "insert", node: kerb }]));
+  const head = applyEdit(board, edit(agent, rev(2), [{ type: "remove", id: kerb.id }, { type: "remove", id: group.id }]));
+  const connector = { id: id(), type: "connector", from: marker.id, to: kerb.id, author: riley, editedAt: 1 };
+  const linked = rebase(board, head, rev(3), edit(riley, rev(2), [{ type: "insert", node: connector }, { type: "move", id: marker.id, groupId: group.id }]));
+  assert.deepEqual(linked.restored.sort(), [group.id, kerb.id].sort());
+  assert.ok(linked.content.nodes.some(node => node.id === connector.id));
+  assert.equal(linked.content.nodes.find(node => node.id === marker.id).groupId, group.id);
+});
+
+test("a paragraph inserted and moved in the same edit is not a position conflict", () => {
+  const { doc, saw, causes } = brief();
+  const head = applyEdit(doc, edit(agent, rev(2), [{ type: "update", id: saw.id, fields: { text: "Changed." } }]));
+  const fresh = paragraph("Next session: Thursday.");
+  const result = rebase(doc, head, rev(3), edit(riley, rev(2), [{ type: "insert", node: fresh, after: causes.id }, { type: "move", id: fresh.id, after: null }]));
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(texts(result.content), ["Next session: Thursday.", "Changed.", causes.text]);
+});

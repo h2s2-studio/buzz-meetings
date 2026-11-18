@@ -152,6 +152,9 @@ export function rebase(base: ArtifactContent, head: ArtifactContent, headRevisio
   for (const op of edit.ops) {
     if (op.type === "insert") {
       if (indexOf(working, op.node.id) >= 0) continue;
+      // A new connector or grouped card keeps what it refers to: restore it if the head removed it.
+      const refs = [(op.node as BoardNode).from, (op.node as BoardNode).to, (op.node as BoardNode).groupId].filter((ref): ref is string => !!ref);
+      if (!refs.every(ref => indexOf(working, ref) >= 0 || restore(ref))) continue;
       const after = op.after && indexOf(working, op.after) < 0 ? undefined : op.after;
       ops.push({ ...op, after }); place(working, op.node, after);
       continue;
@@ -165,6 +168,7 @@ export function rebase(base: ArtifactContent, head: ArtifactContent, headRevisio
     }
     // An update or move to a node the head removed restores it.
     if (!now && !restore(op.id)) continue;
+    if (op.type === "move" && op.groupId && indexOf(working, op.groupId) < 0 && !restore(op.groupId)) continue;
     const current = fieldsOf(working.nodes.find(node => node.id === op.id)), original = fieldsOf(before);
     if (op.type === "update") {
       const fields: NodeFields = {};
@@ -186,7 +190,8 @@ export function rebase(base: ArtifactContent, head: ArtifactContent, headRevisio
       else conflicts.push({ opId: edit.opId, nodeId: op.id, field, mine, theirs });
     }
     if (op.after !== undefined) {
-      if (predecessor(head, op.id) === (before ? predecessor(base, op.id) : undefined)) (move as { after?: string | null }).after = op.after && indexOf(working, op.after) < 0 ? undefined : op.after;
+      // A node this edit inserted has no base position to conflict with.
+      if (!before || predecessor(head, op.id) === predecessor(base, op.id)) (move as { after?: string | null }).after = op.after && indexOf(working, op.after) < 0 ? undefined : op.after;
       else conflicts.push({ opId: edit.opId, nodeId: op.id, field: "position", mine: op.after, theirs: predecessor(head, op.id) });
     }
     if (Object.keys(move).length > 2) ops.push(move);
