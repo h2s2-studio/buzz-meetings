@@ -5,7 +5,7 @@ import type { Answer, LiveAgents } from "./live-agents";
 export type TileAgent = {
   pubkey: string; name: string; local: boolean;
   status?: { state: "listening" | "working" | "needs-input" | "finished"; caption: string; messageId?: string };
-  question?: { key: string; text: string; options: readonly string[]; expiresAt: number };
+  question?: { key: string; text: string; options: readonly string[]; expiresAt: number; askedAt?: number };
   suggestions?: readonly Answer[];
 };
 
@@ -31,8 +31,9 @@ export function agentQuestionUI(React: typeof ReactRuntime, liveAgents?: LiveAge
       {/* Announced only when something is heard; the countdown is not a live region. */}
       <p className="meeting-agent-question-meta text-caption">
         <span role="status">{heard ? `Heard “${heard.heard}” from ${heard.byName}. ${agent.local && heard.by === self?.() ? "Click to confirm." : `${agent.name} decides.`} ` : agent.local ? "Click or say an option. " : "Say an option to answer. "}</span>
-        <span aria-hidden="true">{left > 0 ? `Closes in ${left} s.` : "Closing…"}</span>
       </p>
+      {/* A thin draining line (styled by the design pass) instead of a ticking number. */}
+      <span className="meeting-agent-question-timer" aria-hidden="true" title={left > 0 ? `Closes in ${left} s` : "Closing"} style={{ "--remaining": String(Math.max(0, Math.min(1, (question.expiresAt - now) / Math.max(1, question.expiresAt - (question.askedAt ?? now))))) } as ReactRuntime.CSSProperties} />
     </div>;
   }
   const label: Record<string, string> = { listening: "Listening", working: "Working", "needs-input": "Needs input", finished: "Finished" };

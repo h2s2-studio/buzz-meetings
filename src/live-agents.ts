@@ -70,7 +70,7 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
   }
   async function updateRoster() {
     const runs = [...active.values()].filter(run => run.phase === "listening"), call = media.snapshot();
-    if (call.joinId) await media.setListener(call.joinId, runs.length ? { name: runs.map(run => run.agent.name).join(", ").slice(0,64), mode: runs.some(run => run.mode === "act") ? "act" : "assist", agents:runs.map(run => { const status = statusOf(run), question = run.question?.status === "open" ? run.question : undefined; return { pubkey:run.agent.pubkey, name:run.agent.name, mode:run.mode, state:status.state, caption:status.caption.slice(0,80), ...(question ? { question:{ key:question.key, text:question.text, options:question.options, expiresAt:question.expiresAt } } : {}) }; }) } : undefined);
+    if (call.joinId) await media.setListener(call.joinId, runs.length ? { name: runs.map(run => run.agent.name).join(", ").slice(0,64), mode: runs.some(run => run.mode === "act") ? "act" : "assist", agents:runs.map(run => { const status = statusOf(run), question = run.question?.status === "open" ? run.question : undefined; return { pubkey:run.agent.pubkey, name:run.agent.name, mode:run.mode, state:status.state, caption:status.caption.slice(0,80), ...(question ? { question:{ key:question.key, text:question.text, options:question.options, expiresAt:question.expiresAt, askedAt:question.askedAt } } : {}) }; }) } : undefined);
   }
   function notify(run: Session) {
     if (!currentRun(run) || run.stopped || !run.assigned || !run.root || !allowed(run) || run.base + run.transcripts.length <= run.notified || !ctx.agents) return;

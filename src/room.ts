@@ -61,7 +61,7 @@ type ActiveRoom = {
   grid: Map<string, RemoteTrackPublication>;
 };
 /** An agent listening through a participant's client, as other clients see it (read-only). */
-export type RemoteAgent = { pubkey: string; name: string; mode?: "act" | "assist"; state?: "listening" | "working" | "needs-input" | "finished"; caption?: string; question?: { key: string; text: string; options: string[]; expiresAt: number } };
+export type RemoteAgent = { pubkey: string; name: string; mode?: "act" | "assist"; state?: "listening" | "working" | "needs-input" | "finished"; caption?: string; question?: { key: string; text: string; options: string[]; expiresAt: number; askedAt?: number } };
 // Metadata comes from other clients: keep only well-formed, bounded fields.
 function remoteAgent(value: Record<string, unknown>): RemoteAgent | undefined {
   if (typeof value?.pubkey !== "string" || !/^[0-9a-f]{64}$/.test(value.pubkey) || typeof value.name !== "string" || value.name.length > 64) return;
@@ -72,7 +72,7 @@ function remoteAgent(value: Record<string, unknown>): RemoteAgent | undefined {
   const question = value.question as Record<string, unknown> | undefined;
   if (question && typeof question.key === "string" && typeof question.text === "string" && Array.isArray(question.options) && Number.isSafeInteger(question.expiresAt)) {
     const options = question.options.filter((option): option is string => typeof option === "string").slice(0, 4).map(option => option.slice(0, 40));
-    if (options.length >= 2) agent.question = { key: question.key.slice(0, 64), text: question.text.slice(0, 200), options, expiresAt: question.expiresAt as number };
+    if (options.length >= 2) agent.question = { key: question.key.slice(0, 64), text: question.text.slice(0, 200), options, expiresAt: question.expiresAt as number, ...(Number.isSafeInteger(question.askedAt) ? { askedAt: question.askedAt as number } : {}) };
   }
   return agent;
 }
