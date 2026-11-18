@@ -1151,11 +1151,32 @@ test("builds a board by pointer and keyboard, then turns selected cards into a l
   const before = await card("Show the radius on the minimap").boundingBox();
   await page.mouse.move(before.x + 20, before.y + 20); await page.mouse.down(); await page.mouse.move(before.x + 140, before.y + 90, { steps: 6 }); await page.mouse.up();
   await expect.poll(async () => Math.round((await card("Show the radius on the minimap").boundingBox()).x - before.x)).toBe(120);
-  // Keyboard: arrows nudge the focused card.
-  await card("Brighter kerb paint").focus(); const nudge = await card("Brighter kerb paint").boundingBox();
-  await page.keyboard.press("ArrowRight");
-  await expect.poll(async () => Math.round((await card("Brighter kerb paint").boundingBox()).x - nudge.x)).toBe(12);
-  if (test.info().project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-board.png" });
+  // Moving a group carries its cards.
+  const group = board.getByRole("button", { name: "Group: Visibility", exact: true });
+  const frame = await group.boundingBox(), member = await card("Move the braking marker").boundingBox();
+  await page.mouse.move(frame.x + 8, frame.y + 8); await page.mouse.down(); await page.mouse.move(frame.x + 68, frame.y + 8, { steps: 6 }); await page.mouse.up();
+  await expect.poll(async () => Math.round((await card("Move the braking marker").boundingBox()).x - member.x)).toBe(60);
+  // Keyboard: a held arrow nudges the focused card and saves once, on key-up.
+  const saved = view.getByText(/^Saved · revision \d+/);
+  const revisionNow = async () => Number((await saved.textContent()).match(/revision (\d+)/)[1]);
+  await card("Brighter kerb paint").focus(); const nudge = await card("Brighter kerb paint").boundingBox(), first = await revisionNow();
+  for (let i = 0; i < 3; i++) await page.keyboard.down("ArrowRight");
+  await page.keyboard.up("ArrowRight");
+  await expect.poll(async () => Math.round((await card("Brighter kerb paint").boundingBox()).x - nudge.x)).toBe(36);
+  await expect.poll(revisionNow).toBe(first + 1);
+  // With nothing selected, the brief action says what it needs.
+  await board.getByLabel("Board surface", { exact: true }).click({ position: { x: 640, y: 300 } });
+  await expect(board.getByText("Select cards to turn them into a brief", { exact: true })).toBeVisible();
+  await expect(board.getByRole("button", { name: "Turn into a brief", exact: true })).toBeDisabled();
+  // Backspace doesn't delete; Delete does, and Undo puts the card back in its group.
+  await card("Brighter kerb paint").focus(); await page.keyboard.press("Backspace");
+  await expect(card("Brighter kerb paint")).toBeVisible();
+  await page.keyboard.press("Delete");
+  await expect(card("Brighter kerb paint")).toHaveCount(0);
+  const removedNotice = board.getByRole("status").filter({ hasText: "Removed Card “Brighter kerb paint”" });
+  await removedNotice.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(card("Brighter kerb paint")).toBeVisible(); await expect(removedNotice).toHaveCount(0);
+  if (test.info().project.name === "chromium") { await board.locator(".meeting-board-surface").evaluate(element => { for (let node = element; node; node = node.parentElement) node.scrollTop = 0; }); await page.screenshot({ path: "docs/screenshots/meetings-board.png" }); }
   // Outline: the same board as a keyboard list.
   await board.getByRole("button", { name: "Outline", exact: true }).click();
   const outline = board.getByRole("listbox", { name: "Board outline" });
@@ -1163,7 +1184,7 @@ test("builds a board by pointer and keyboard, then turns selected cards into a l
   await outline.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
   const edit = board.getByLabel("Card text", { exact: true }); await edit.fill("Move the marker out of the shadow"); await edit.press("Enter");
   await expect(outline.getByRole("option").nth(1)).toHaveText(/^Move the marker out of the shadow/);
-  await page.keyboard.press("Space"); await page.keyboard.press("End"); await page.keyboard.press("Space");
+  await outline.focus(); await page.keyboard.press("Space"); await page.keyboard.press("End"); await page.keyboard.press("Space");
   await expect(board.getByRole("status").filter({ hasText: "2 cards selected" })).toBeVisible();
   await board.getByRole("button", { name: "Turn into a brief", exact: true }).click();
   const brief = view.getByRole("region", { name: /^Document: Brief: / });

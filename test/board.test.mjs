@@ -68,3 +68,31 @@ test("a source link is only valid on a document and must be well formed", () => 
   assert.throws(() => createContent({ kind: "document", title: "x", createdBy: agent, source: { ...good, revision: "nope" } }), ArtifactError);
   assert.throws(() => createContent({ kind: "document", title: "x", createdBy: agent, source: { ...good, extra: 1 } }), ArtifactError);
 });
+
+test("moving a group carries its cards by the same delta", async () => {
+  const { moveOps } = await load("src/board.ts");
+  let content = board();
+  const [a, b] = [cardId(content, "Move the braking marker"), cardId(content, "Brighter kerb paint")];
+  content = applyEdit(content, edit(agent, groupOps(content, [a, b], agent, "Visibility")));
+  const group = content.nodes.find(node => node.type === "group");
+  const before = Object.fromEntries(content.nodes.map(node => [node.id, [node.x, node.y]]));
+  content = applyEdit(content, edit(riley, moveOps(content, group.id, 30, -10)));
+  for (const id of [group.id, a, b]) { const node = content.nodes.find(item => item.id === id); assert.deepEqual([node.x, node.y], [before[id][0] + 30, before[id][1] - 10]); }
+  const loose = cardId(content, "Show the radius on the minimap");
+  assert.deepEqual([content.nodes.find(node => node.id === loose).x], [before[loose][0]], "other cards stay put");
+});
+
+test("undoing a removal puts back the nodes, their connectors, authors and group membership", async () => {
+  const { removeOps } = await load("src/board.ts");
+  let content = board();
+  const [a, b, c] = ["Move the braking marker", "Brighter kerb paint", "Show the radius on the minimap"].map(text => cardId(content, text));
+  content = applyEdit(content, edit(agent, groupOps(content, [a, b], agent, "Visibility")));
+  content = applyEdit(content, edit(agent, [connectOp(content, a, c, agent)]));
+  const group = content.nodes.find(node => node.type === "group").id;
+  const original = JSON.stringify(content.nodes.map(node => ({ ...node })).sort((x, y) => x.id.localeCompare(y.id)));
+  const { ops, undo } = removeOps(content, [a, group]);
+  const removed = applyEdit(content, edit(riley, ops));
+  assert.equal(removed.nodes.some(node => node.type === "connector"), false); assert.equal(removed.nodes.find(node => node.id === b).groupId, undefined);
+  const back = applyEdit(removed, edit(riley, undo));
+  assert.equal(JSON.stringify(back.nodes.map(node => ({ ...node })).sort((x, y) => x.id.localeCompare(y.id))), original);
+});

@@ -488,7 +488,7 @@ details[class^="meeting-"][open] > summary { margin-block-end: var(--space-2); }
 .meeting-board-author { margin-block-start: auto; color: var(--text-metadata); }
 .meeting-board-input { width: 100%; height: 100%; min-height: 3rem; resize: none; border: 0; background: transparent; color: inherit; font: inherit; }
 .meeting-board-input:focus { outline: none; }
-.meeting-board-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); color: var(--text-subtle); }
+.meeting-board-conflict { position: absolute; z-index: 2; box-sizing: border-box; padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); background: var(--surface-raised, var(--surface-inset)); box-shadow: var(--shadow-sm); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); color: var(--text-subtle); }
 .meeting-board-empty { position: absolute; inset-block-start: 40%; inset-inline: 0; text-align: center; margin: 0; }
 .meeting-board-outline { list-style: none; margin: 0; padding: var(--space-2); display: grid; gap: 2px; border-radius: var(--radius-container); background: var(--surface-inset); }
 .meeting-board-outline:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }

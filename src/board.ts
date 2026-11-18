@@ -19,8 +19,8 @@ export function addCardOp(content: ArtifactContent, actor: string, text: string,
 export function groupOps(content: ArtifactContent, ids: readonly string[], actor: string, label: string, at = Date.now()): NodeOp[] {
   const chosen = cards(content).filter(card => ids.includes(card.id));
   if (chosen.length < 2) return [];
-  // Kept on the board (never at negative or clipped coordinates).
-  const left = Math.max(8, Math.min(...chosen.map(card => card.x ?? 0)) - groupPadding), top = Math.max(8, Math.min(...chosen.map(card => card.y ?? 0)) - groupPadding - 16);
+  // New cards start far enough from the edge that a frame around them never goes negative.
+  const left = Math.min(...chosen.map(card => card.x ?? 0)) - groupPadding, top = Math.min(...chosen.map(card => card.y ?? 0)) - groupPadding - 16;
   const right = Math.max(...chosen.map(card => (card.x ?? 0) + (card.w ?? cardSize.w))) + groupPadding, bottom = Math.max(...chosen.map(card => (card.y ?? 0) + (card.h ?? cardSize.h))) + groupPadding;
   const id = crypto.randomUUID();
   // The group goes first so cards render above it.
@@ -65,4 +65,30 @@ export function briefFrom(board: ArtifactContent, boardId: string, revision: str
     for (const card of inGroup) add("paragraph", card.text || "Untitled");
   }
   return applyEdit(document, { opId: crypto.randomUUID(), base: "", actor, at, ops });
+}
+
+/** Move a node by a delta; a group carries its cards with it, in the same edit. */
+export function moveOps(content: ArtifactContent, id: string, dx: number, dy: number, extra: { groupId?: string | null } = {}): NodeOp[] {
+  const node = content.nodes.find(item => item.id === id) as BoardNode | undefined;
+  if (!node || node.type === "connector" || (!dx && !dy && extra.groupId === undefined)) return [];
+  const shift = (item: BoardNode) => ({ x: Math.round((item.x ?? 0) + dx), y: Math.round((item.y ?? 0) + dy) });
+  const ops: NodeOp[] = [{ type: "move", id, ...shift(node), ...extra }];
+  if (node.type === "group") for (const card of cards(content).filter(card => card.groupId === id)) ops.push({ type: "move", id: card.id, ...shift(card) });
+  return ops;
+}
+
+/**
+ * Remove nodes, and the operations that put back exactly what went: the nodes with
+ * their original author and time, the connectors that went with them, and group membership.
+ */
+export function removeOps(content: ArtifactContent, ids: readonly string[]): { ops: NodeOp[]; undo: NodeOp[] } {
+  const gone = new Set(ids.filter(id => content.nodes.some(node => node.id === id)));
+  const connectors = content.nodes.filter(node => { const value = node as BoardNode; return value.type === "connector" && !gone.has(value.id) && (gone.has(value.from!) || gone.has(value.to!)); });
+  const removed = content.nodes.filter(node => gone.has(node.id) || connectors.includes(node));
+  const order = (node: ArtifactContent["nodes"][number]) => ({ group: 0, card: 1, connector: 2 } as Record<string, number>)[(node as BoardNode).type] ?? 1;
+  const regroup = cards(content).filter(card => card.groupId && gone.has(card.groupId) && !gone.has(card.id)).map(card => ({ type: "move" as const, id: card.id, groupId: card.groupId! }));
+  return {
+    ops: [...gone].map(id => ({ type: "remove" as const, id })),
+    undo: [...[...removed].sort((a, b) => order(a) - order(b)).map(node => ({ type: "insert" as const, node: JSON.parse(JSON.stringify(node)), restore: true as const, ...((node as BoardNode).type === "group" ? { after: null } : {}) })), ...regroup],
+  };
 }
