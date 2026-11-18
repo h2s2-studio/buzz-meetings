@@ -1,3 +1,4 @@
+import { agentQuestionUI } from "./agent-question-ui";
 import type { LiveAgents, LiveAgentState } from "./live-agents";
 import type { makeRoomSession, RoomSnapshot } from "./room";
 import type * as ReactRuntime from "react";
@@ -30,8 +31,9 @@ const templates = {
   actions: { label: "Extract action items", text: "Extract action items from this channel’s discussion and shared notes. Include an owner and due date only when they are stated; mark missing details as unassigned." },
 } as const;
 
-export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; navigation: { open(target: ConversationTarget): Promise<unknown> } }, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>) {
+export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapshot(): WorkspaceConnection; subscribe(listener: () => void): () => void }; navigation: { open(target: ConversationTarget): Promise<unknown> } }, liveAgents?: LiveAgents, media?: ReturnType<typeof makeRoomSession>, openResult?: (channelId: string, messageId: string) => void) {
   const React = ctx.react;
+  const { AgentQuestion } = agentQuestionUI(ctx.react, liveAgents);
   const AgentIcon=agentIcon(React);
   const { useEffect, useState, useSyncExternalStore } = React;
   const drafts = new WeakMap<object, Map<string, { selected: string; draft: string; kind: keyof typeof templates; liveMode: "act" | "assist"; mission: string }>>();
@@ -75,6 +77,8 @@ export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapsh
       finally { setBusy(false); }
     }
     function open(panel?: "members", messageId?: string) {
+      // In a call, a result opens in the call's own chat instead of leaving Meetings.
+      if (messageId && openResult && media && media.snapshot().phase !== "idle") { openResult(channelId, messageId); return; }
       if (!live.viewer || !live.origin || ctx.relay.snapshot().session !== session || !access) return;
       void ctx.navigation.open({ version: 1, kind: "conversation", scope: { viewer: live.viewer, communityOrigin: live.origin }, channelId, ...(panel ? { panel } : {}), ...(messageId ? { messageId } : {}) });
     }
@@ -107,7 +111,7 @@ export function meetingAgents(ctx: { react: typeof ReactRuntime; relay: { snapsh
       <header><h3 className="text-body-sm">Agents in this call</h3><Action disabled={!access} onClick={() => open("members")}>Manage access</Action></header>
       {!access ? <p role="status">Reconnect and choose a channel you belong to to work with its agents.</p> : <>
         {(listening.members ?? []).filter(item => item.channelId === channelId).map(item => <div className="meeting-agent-member" key={item.pubkey}>
-          <span className="meeting-agent-symbol" aria-hidden="true"><AgentIcon /></span><div><strong>{item.name}</strong><p className="text-caption text-subtle" role="status">{item.phase === "starting" ? "Joining…" : "Listening · ready for spoken tasks"}</p>{(() => { const reach = (session.channels?.list().channels ?? []).filter(other => other.members?.includes(item.pubkey)).map(other => other.name).sort((a, b) => a.localeCompare(b)); return <p className="text-caption text-subtle">{reach.length > 1 ? `Can search ${reach.length} channels it belongs to: ${reach.slice(0, 6).join(", ")}${reach.length > 6 ? "…" : ""}` : "Can search this channel only. Add it to other channels to let it use their context."}</p>; })()}{liveAgents?.stopsCapture(item.pubkey) && <p className="text-caption text-subtle" id={`meeting-agent-remove-${item.pubkey}`}>Removing it also stops transcription here. Open Transcript first to keep it running.</p>}</div>
+          <span className="meeting-agent-symbol" aria-hidden="true"><AgentIcon /></span><div><strong>{item.name}</strong><p className="text-caption text-subtle" role="status">{item.phase === "starting" ? "Joining…" : item.status.state === "listening" ? "Listening · ready for spoken tasks" : `${({ working: "Working", "needs-input": "Needs input", finished: "Finished" } as const)[item.status.state]} · ${item.status.caption}`}</p>{(() => { const reach = (session.channels?.list().channels ?? []).filter(other => other.members?.includes(item.pubkey)).map(other => other.name).sort((a, b) => a.localeCompare(b)); return <p className="text-caption text-subtle">{reach.length > 1 ? `Can search ${reach.length} channels it belongs to: ${reach.slice(0, 6).join(", ")}${reach.length > 6 ? "…" : ""}` : "Can search this channel only. Add it to other channels to let it use their context."}</p>; })()}{liveAgents?.stopsCapture(item.pubkey) && <p className="text-caption text-subtle" id={`meeting-agent-remove-${item.pubkey}`}>Removing it also stops transcription here. Open Transcript first to keep it running.</p>}</div>
           <Action aria-label={liveAgents?.stopsCapture(item.pubkey) ? `Remove ${item.name} from call and stop transcription` : `Remove ${item.name} from call`} aria-describedby={liveAgents?.stopsCapture(item.pubkey) ? `meeting-agent-remove-${item.pubkey}` : undefined} onClick={() => liveAgents?.stop("", item.pubkey)}>{liveAgents?.stopsCapture(item.pubkey) ? "Remove and stop transcription" : "Remove"}</Action>
         </div>)}
         {listening.error && <p role="alert" className="text-danger">{listening.error}</p>}

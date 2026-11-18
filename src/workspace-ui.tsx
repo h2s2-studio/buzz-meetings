@@ -9,7 +9,7 @@ import { meetingService, type MeetingService, type Presence } from "./workspace-
 import { communityBroker, pluginId } from "./protocol";
 
 export type PageNavigation = { target: { route?: { params?: unknown }; params?: Readonly<Record<string, string>>; scope?: { viewer: string; communityOrigin: string } | null } };
-export type ConversationProps = { id: string; session: WorkspaceConnection["session"]; scope: string; target: { channelId: string }; label: string; actions?: readonly { label: string; run(): void }[] };
+export type ConversationProps = { id: string; session: WorkspaceConnection["session"]; scope: string; target: { channelId: string; messageId?: string }; label: string; actions?: readonly { label: string; run(): void }[] };
 export type PanelContribution = { id: string; pluginId: string; revision: string; component: ReactRuntime.ComponentType<{ target: string; close(): void; channelContext: { scope: string; channelId: string; channelName: string; viewer: string; relayUrl: string } }> };
 export type WorkspaceContext = {
   react: typeof ReactRuntime; artifactStorage: Storage;
@@ -29,9 +29,11 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
   temporary?: { Rows: ReactRuntime.ComponentType; count(): number; add(name: string): string; manage(): void };
   /** Pre-join: who is in this workspace's call, read without joining. */
   presence?(channel: Channel, signal: AbortSignal): Promise<Presence>;
-  AudioCheck?: ReactRuntime.ComponentType }) {
+  AudioCheck?: ReactRuntime.ComponentType;
+  /** Open an agent's result inside the call when one is running. */
+  openResult?(channelId: string, messageId: string): void }) {
   const React = ctx.react;
-  const Agents = meetingAgents(ctx, liveAgents, media);
+  const Agents = meetingAgents(ctx, liveAgents, media, voice?.openResult);
   const { useEffect, useState, useSyncExternalStore } = React;
   let controller: Workspaces | undefined, connection = ctx.relay.snapshot(), stopController = () => {};
   let state = empty, problem = "", proposed = "";
@@ -57,9 +59,9 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     proposed = id;
     void ctx.navigation.open({ version: 1, kind: "settings", section: `${pluginId}/workspaces` });
   }
-  let viewRequest: { id:string; view:"agents" | "transcript" | "call" | "documents"; sequence:number } | undefined;
-  function open(id: string, view?: "agents" | "transcript" | "call" | "documents") {
-    if (view) { viewRequest={id,view,sequence:(viewRequest?.sequence ?? 0)+1}; state={...state}; for (const listener of listeners) listener(); }
+  let viewRequest: { id:string; view:"agents" | "transcript" | "call" | "documents" | "chat"; messageId?: string; sequence:number } | undefined;
+  function open(id: string, view?: "agents" | "transcript" | "call" | "documents" | "chat", messageId?: string) {
+    if (view) { viewRequest={id,view,messageId,sequence:(viewRequest?.sequence ?? 0)+1}; state={...state}; for (const listener of listeners) listener(); }
     const current = ctx.relay.snapshot();
     if (!current.viewer || !current.origin) return;
     controller?.select(id);
@@ -191,6 +193,8 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
     }, [live.session, id, access]);
     useEffect(() => { if (inCall) setSurface("call"); }, [inCall]);
     useEffect(() => { if (viewRequest && viewRequest.id === id) setSurface(viewRequest.view); }, [id,viewRequest?.sequence]);
+    // A result opened from a tile lands in this workspace's own conversation, at that message.
+    const request = viewRequest, chatMessage = request && request.id === id && request.view === "chat" ? request.messageId : undefined;
     // Overview polls presence while visible and out of the call; in the call the roster is live.
     useEffect(() => {
       setPresence({});
@@ -261,7 +265,7 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
         <div className="meeting-workspace-tabs" role="group" aria-label="Workspace views">{inCall && <><Action aria-pressed={surface === "call"} onClick={() => setSurface("call")}>Voice</Action><Action aria-pressed={surface === "transcript"} onClick={() => { setSurface("transcript"); voice?.startTranscript(); }}>Transcript</Action></>}{item && <Action aria-pressed={reviewing} onClick={() => setSurface("review")}>{inCall ? "Earlier transcript" : "Transcript"}</Action>}<Action aria-pressed={surface === "overview"} onClick={() => setSurface("overview")}>Overview</Action><Action aria-pressed={surface === "notes"} onClick={() => setSurface("notes")}>Notes</Action><Action aria-pressed={surface === "chat"} onClick={() => setSurface("chat")}>Chat & files</Action><Action aria-pressed={surface === "agents"} onClick={() => setSurface("agents")}>Agents</Action>{voice?.Documents && <Action aria-pressed={surface === "documents"} onClick={() => setSurface("documents")}>Documents & boards{voice.documentsPreview && <span className="meeting-preview-badge text-caption"> Preview</span>}</Action>}{voice && <Action aria-pressed={surface === "records"} onClick={() => setSurface("records")}>Meeting records</Action>}</div>
         <div className="meeting-workspace-surface" key={`${live.scope}:${id}`}>
           {surface === "documents" && voice?.Documents ? <voice.Documents channelId={channel!.id} /> : surface === "records" && voice ? <voice.Records channelId={channel!.id} /> : surface === "call" && voice && inCall ? <voice.Call /> : reviewing && voice ? <voice.Transcript key={item.joinId} review={item} roomName={item.roomName ?? channel!.name} close={() => setSurface(inCall ? "call" : "notes")} /> : surface === "transcript" && voice && inCall ? <voice.Transcript roomName={call!.roomName!} close={() => setSurface("call")} /> : surface === "agents" ? <Agents channelId={channel!.id} roomName={inCall ? call!.roomName : undefined} /> : surface === "overview" ? overview() : surface === "notes" ? Canvas && live.viewer && live.origin && live.scope ? <Canvas target="" close={() => setSurface("chat")} channelContext={{ scope: live.scope, channelId: channel!.id, channelName: channel!.name, viewer: live.viewer, relayUrl: live.origin }} /> : <p>Turn on Channels to use shared Canvas notes here.</p>
-            : Conversation && live.scope ? <Conversation id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
+            : Conversation && live.scope ? <Conversation key={chatMessage} id={`meetings-workspace-${channel!.id}`} session={live.session} scope={live.scope} target={{ channelId: channel!.id, ...(chatMessage ? { messageId: chatMessage } : {}) }} label={channel!.name} /> : <p>Turn on Channels to use this workspace’s conversation and files.</p>}
         </div><p className="meeting-workspace-footnote text-caption text-metadata">Chat, notes and task results stay with this channel after the call.</p>
       </>}{inCall && surface === "call" ? null : children}
     </section>;
