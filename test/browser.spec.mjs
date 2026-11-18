@@ -828,7 +828,8 @@ test("an agent asks on its tile, the owner answers by clicking, others see it re
   const asks = stage(page).getByRole("group", { name: "Research helper asks" });
   await expect(asks).toContainText("Turn these notes into a brief?");
   await expect(asks.getByRole("button", { name: "Yes, draft it", exact: true })).toBeVisible();
-  await expect(asks.getByRole("status")).toContainText(/Click or say an option\. Closes in \d+ s\./);
+  await expect(asks.getByRole("status")).toHaveText("Click or say an option.");
+  await expect(asks).toContainText(/Closes in \d+ s\./);
   // Another participant sees it read-only and is told to say an option.
   const remote = stage(other).getByRole("group", { name: "Research helper asks" });
   await expect(remote).toContainText("Turn these notes into a brief?", { timeout: 15000 });
