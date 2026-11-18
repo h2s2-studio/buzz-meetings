@@ -26,6 +26,9 @@ pub(super) struct WorkspaceRequest {
     pub picture: Option<String>,
     #[serde(default)]
     pub captions: bool,
+    /// Read who is in the call without joining it (pre-join overview).
+    #[serde(default)]
+    pub presence: bool,
 }
 
 impl WorkspaceAccess {
@@ -225,7 +228,13 @@ pub(super) async fn serve(
     let result = authorize(socket, &service, raw, &request).await;
     match result {
         Ok((viewer, room)) => {
-            if request.captions {
+            if request.presence {
+                let _ = socket
+                    .send(Message::Text(
+                        crate::presence(&service, &room).await.to_string().into(),
+                    ))
+                    .await;
+            } else if request.captions {
                 captions::serve(socket, &service, &room, Some((&request.channel, viewer))).await;
             } else {
                 let metadata =

@@ -4,7 +4,26 @@ A persistent meeting destination is a Buzz channel. Its voice room derives from
 the community origin and channel UUID, so a rename keeps the same destination.
 Notes, conversation, agents, transcript and saved records are views of that
 workspace. Opening a workspace never requests a microphone; **Join voice** does.
-Legacy name-based quick rooms remain compatible personal shortcuts.
+Name-based temporary meetings (formerly quick rooms) are personal shortcuts in
+the same Meetings list, kept under their original storage key.
+
+**Call shell.** One staged item fills the stage: a share, a person, or all
+screens. With nothing staged, everyone fills the stage as a grid. The
+filmstrip lists every share and, while something is staged, every person and
+agent. Share tiles are not live video; only the staged share is subscribed. A
+viewer's stage changes only on their own action. If the staged item ends, the
+stage falls back to the next share, then to everyone, and says why. The control
+bar is labeled (Mute, Camera, Share, Agent, Edit together, Transcript, Leave),
+followed by secondary audio and capture controls in the same keyboard order.
+The side panel is a Chat / Transcript / Agent tab set.
+
+**Overview.** A workspace opens on Overview: who is in the call with its start
+time and freshness, listening agents and their role, the agenda from shared
+notes, the last record, and a Ready to join card with an audio check. Out of the
+call, presence comes from a broker `presence` request. It is gated by the same
+signed workspace admission as joining (access key or trusted proxy for temporary
+meetings), mints no media token, and reads LiveKit `ListRooms` and
+`ListParticipants`.
 
 One plugin-lifetime LiveKit session owns microphone/camera publication, playback
 and screen subscriptions. Changing views keeps it alive. Leaving, changing
@@ -16,7 +35,7 @@ request and channel. The broker checks current relay-signed channel state throug
 its own ordinary service identity. Explicit **Enable voice & join** adds that
 identity as a channel guest; it does not borrow a human or agent's credentials.
 The broker verifies membership periodically and removes revoked participants.
-Quick rooms retain the existing access-key/trusted-proxy boundary and unverified
+Temporary meetings retain the existing access-key/trusted-proxy boundary and unverified
 random media identities.
 
 The speech worker owns one microphone subscription per source per call, one

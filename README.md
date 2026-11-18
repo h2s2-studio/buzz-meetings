@@ -9,6 +9,8 @@ the Rust admission server and LiveKit.
 
 ![Three participants sharing two screens in Meetings](docs/screenshots/meetings.png)
 
+![A workspace Overview showing who is in the call before joining](docs/screenshots/meetings-overview.png)
+
 Screenshots use the browser fixture. Media transport is real; native content and
 agent execution are simulated and still require acceptance in Buzz.
 
@@ -18,8 +20,9 @@ agent execution are simulated and still require acceptance in Buzz.
 2. Paste `https://github.com/h2s2-studio/buzz-meetings` into **Git or GitHub repository**.
    Leave Folder empty. Choose **Find → Install plugin** and enable **Meetings**.
 3. Open **Meetings** in the app dock. Create or open a meeting in the sidebar,
-   then choose **Join voice**. **Quick rooms → General Voice** remains a direct
-   shortcut for existing calls. The v0.2.1 sidebar calls that section **Voice Channels**.
+   then choose **Join voice** on its Overview. Saved name-based rooms (the earlier
+   **Quick rooms** / **Voice Channels**) appear in the same **Meetings** list as
+   **Temporary** meetings; **+ → Add temporary meeting** creates one.
 4. Allow microphone permission when your system asks.
    Your avatar and name appear after connecting. The screen icon opens sharing
    settings above the call controls; choose a source in the system picker. Use **Watch** to view someone’s

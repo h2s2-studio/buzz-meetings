@@ -177,9 +177,9 @@ test("a rendered document and board share the agent screen alongside a human sha
     const sam = await open("/test/fixture.html?viewer=Sam");
     const riley = await open("/test/fixture.html?viewer=Riley");
     for (const page of [sam, riley]) {
-      await button(page.getByRole("navigation", { name: "Meeting rooms" }), "Join General Voice").click();
+      await button(page.getByRole("navigation", { name: "Meetings", exact: true }), "Join General Voice").click();
       await expect(page.getByRole("group", { name: "Meeting controls" }).getByRole("status")).toHaveText("Voice connected");
-      await button(page, "Hide room chat").click();
+      await button(page, "Close side panel").click();
     }
     await button(riley, "Share screen").click(); await button(riley, "Choose screen or window").click();
     const agent = await open("/review-presenter");
@@ -210,7 +210,9 @@ test("a rendered document and board share the agent screen alongside a human sha
     await expect(button(sam, "Watch Riley’s stream")).toBeVisible();
     await agent.evaluate(() => window.stopPresentation());
     await expect(button(sam, "Watch Studio agent’s stream")).toHaveCount(0);
-    await button(sam, "Watch Riley’s stream").click();
+    // The staged agent screen ended: the stage falls back to Riley's share and says so.
+    await expect(sam.getByRole("status").filter({ hasText: "Studio agent’s screen ended. Showing Riley’s screen." })).toBeVisible();
+    await expect(button(sam, "Watch Riley’s stream")).toHaveAttribute("aria-pressed", "true");
     await expect.poll(() => screen.evaluate(video => video.currentTime)).toBeGreaterThan(0);
   } finally {
     await Promise.allSettled(contexts.map(context => context.close()));

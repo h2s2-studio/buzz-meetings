@@ -56,6 +56,12 @@ enum Request {
         picture: Option<String>,
         key: Option<String>,
     },
+    /// Pre-join presence for a name-based meeting, under the same access rules as joining.
+    Presence {
+        community: String,
+        room: String,
+        key: Option<String>,
+    },
     Listen {
         name: String,
         community: String,
@@ -288,7 +294,9 @@ impl RoomService {
         );
         let mut metadata = None;
         let (name, room_name, invite) = match request {
-            Request::Workspace(_) | Request::Service => return Err("Invalid room request."),
+            Request::Workspace(_) | Request::Service | Request::Presence { .. } => {
+                return Err("Invalid room request.")
+            }
             Request::Meeting {
                 name,
                 community,
@@ -412,6 +420,126 @@ impl RoomService {
     }
 }
 
+/// Who is in a media room, read with a room-admin token and never joining it.
+/// An absent room is an empty call, not an error.
+pub(crate) async fn presence(service: &RoomService, room: &str) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let checked_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let token = |list: bool| {
+        AccessToken::with_api_key(&service.api_key, &service.api_secret)
+            .with_ttl(Duration::from_secs(60))
+            .with_grants(VideoGrants {
+                room: if list { String::new() } else { room.to_owned() },
+                room_list: list,
+                room_admin: !list,
+                ..Default::default()
+            })
+            .to_jwt()
+            .ok()
+    };
+    let call = |action: &'static str, list: bool, body: Value| async move {
+        let endpoint = workspaces::media_api(&service.livekit_url, action)?;
+        service
+            .http
+            .post(endpoint)
+            .bearer_auth(token(list)?)
+            .json(&body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<Value>()
+            .await
+            .ok()
+    };
+    let Some(rooms) = call("ListRooms", true, json!({"names":[room]})).await else {
+        return json!({"type":"error","error":"Meeting presence is unavailable right now."});
+    };
+    let started = rooms
+        .get("rooms")
+        .and_then(Value::as_array)
+        .and_then(|rooms| rooms.first())
+        .and_then(|room| {
+            room.get("creation_time")
+                .or_else(|| room.get("creationTime"))
+        })
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()));
+    let mut people = Vec::new();
+    if started.is_some() {
+        let listed = call("ListParticipants", false, json!({"room":room})).await;
+        for person in listed
+            .as_ref()
+            .and_then(|value| value.get("participants"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let identity = person.get("identity").and_then(Value::as_str).unwrap_or("");
+            if identity.starts_with("transcription-") {
+                continue;
+            }
+            let metadata: Value =
+                serde_json::from_str(person.get("metadata").and_then(Value::as_str).unwrap_or(""))
+                    .unwrap_or(Value::Null);
+            let sharing = person
+                .get("tracks")
+                .and_then(Value::as_array)
+                .is_some_and(|tracks| {
+                    tracks.iter().any(|track| {
+                        matches!(track.get("source"), Some(source) if source == "SCREEN_SHARE" || source == 3)
+                    })
+                });
+            let agents: Vec<Value> = metadata
+                .get("liveAgents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(4)
+                .filter_map(|agent| {
+                    let name = agent
+                        .get("name")?
+                        .as_str()?
+                        .chars()
+                        .take(64)
+                        .collect::<String>();
+                    let mode = agent
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .filter(|mode| ["act", "assist"].contains(mode));
+                    Some(json!({"name":name, "mode":mode}))
+                })
+                .collect();
+            let name: String = person
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("Participant")
+                .chars()
+                .take(48)
+                .collect();
+            people.push(json!({
+                "name": name,
+                "sharing": sharing,
+                "transcribing": metadata.get("liveTranscription") == Some(&Value::Bool(true)),
+                "agents": agents,
+            }));
+            if people.len() >= 32 {
+                break;
+            }
+        }
+    }
+    json!({
+        "type": "presence",
+        "checkedAt": checked_at,
+        "startedAt": started.map(|seconds| seconds * 1000),
+        "participants": people,
+    })
+}
+
 pub(crate) fn valid_occurrence(sid: &str) -> bool {
     sid.len() <= 64
         && sid.starts_with("RM_")
@@ -469,6 +597,26 @@ async fn admit_socket(mut socket: WebSocket, rooms: Arc<RoomService>, trusted_pr
     match request {
         Ok(Request::Workspace(input)) => {
             workspaces::serve(&mut socket, rooms, &message, input).await;
+            return;
+        }
+        Ok(Request::Presence {
+            community,
+            room,
+            key,
+        }) => {
+            let meeting = Request::Meeting {
+                name: "Presence".into(),
+                community,
+                room,
+                picture: None,
+                key,
+            };
+            let reply = match rooms.admit(meeting, now.as_millis() as u64, trusted_proxy) {
+                Ok(Reply::Admitted { room, .. }) => presence(&rooms, &room).await,
+                Ok(_) => serde_json::json!({"type":"error","error":"Invalid room request."}),
+                Err(error) => serde_json::json!({"type":"error","error":error}),
+            };
+            let _ = socket.send(Message::Text(reply.to_string().into())).await;
             return;
         }
         Ok(Request::Service) => {
@@ -948,5 +1096,37 @@ mod tests {
         );
         media_task.abort();
         broker_task.abort();
+    }
+
+    #[tokio::test]
+    async fn presence_lists_people_sharing_and_agents_without_the_speech_worker() {
+        use axum::{routing::post, Json};
+        let media = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", media.local_addr().unwrap());
+        let app = Router::new()
+            .route("/twirp/livekit.RoomService/ListRooms", post(|| async { Json(serde_json::json!({"rooms":[{"name":"meeting-x","creation_time":"1700000000"}]})) }))
+            .route("/twirp/livekit.RoomService/ListParticipants", post(|| async { Json(serde_json::json!({"participants":[
+                {"identity":"transcription-1","name":"Speech"},
+                {"identity":"a","name":"Riley","metadata":"{\"liveAgents\":[{\"name\":\"Studio\",\"mode\":\"act\"}]}","tracks":[{"source":"SCREEN_SHARE"}]},
+                {"identity":"b","name":"Sam","metadata":"{\"liveTranscription\":true}","tracks":[{"source":"MICROPHONE"}]}
+            ]})) }));
+        let task = tokio::spawn(async move { axum::serve(media, app).await.unwrap() });
+        let service = RoomService::new(
+            Url::parse(&url).unwrap(),
+            "devkey".into(),
+            "secret".into(),
+            "test-access",
+        );
+        let value = presence(&service, "meeting-x").await;
+        assert_eq!(value["type"], "presence");
+        assert_eq!(value["startedAt"], 1_700_000_000_000u64);
+        assert_eq!(
+            value["participants"],
+            serde_json::json!([
+                {"name":"Riley","sharing":true,"transcribing":false,"agents":[{"name":"Studio","mode":"act"}]},
+                {"name":"Sam","sharing":false,"transcribing":true,"agents":[]}
+            ])
+        );
+        task.abort();
     }
 }
