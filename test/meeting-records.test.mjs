@@ -70,3 +70,14 @@ test("saved records keep same-name speakers distinct and still read version 1 sn
   assert.equal(await records.read("20000000-0000-4000-8000-000000000002"),"[2026-01-01T00:00:00.000Z] Alex: Legacy line.");
   records.close(); connection.close();
 });
+test("a storage that keeps refusing to open is not retried on every relay update",async () => {
+  const host = new WorkspaceHost(), connection = client(host), listeners = new Set();
+  let opens = 0, emits = 0;
+  const storage = { open() { opens++; throw new Error("Artifact storage is unavailable"); } };
+  const relay = { snapshot:connection.current, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };
+  const records = meetingRecords(relay,storage); records.subscribe(() => emits++);
+  assert.equal(opens,1); assert.match(records.snapshot().error,/aren’t available/);
+  for (let tick = 0; tick < 5; tick++) for (const fn of listeners) fn();
+  assert.equal(opens,1); assert.equal(emits,0);
+  records.close(); connection.close();
+});

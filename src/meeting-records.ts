@@ -49,11 +49,15 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
     } catch { if (!closed && connection === scope) emit({ error: "Meeting records couldn’t synchronize. Your saved work is retained." }); }
   }
   const bindable = (value: WorkspaceConnection) => !!value.viewer && !!value.origin && !!value.scope;
+  // The connection whose storage failed to open; retried only when the connection changes.
+  let failed: WorkspaceConnection | undefined;
+  const same = (a: WorkspaceConnection, b: WorkspaceConnection) => a.session === b.session && a.scope === b.scope && a.viewer === b.viewer && a.origin === b.origin;
   function attach() {
     if (!bindable(connection)) return;
     try {
       collection = storage.open({ name: "meeting-records", type: recordType, version: 1, project(entry) { return parse(entry) ? [{ index: "records", value: "all", order: entry.record.id }] : []; } });
-    } catch { collection = undefined; return; }
+    } catch { collection = undefined; failed = connection; emit({ error: "Meeting records aren’t available on this connection yet. Reconnect to try again." }); return; }
+    failed = undefined;
     stopCollection = collection.subscribe(() => { void refresh(); }); void refresh();
   }
   function detach() { stopCollection(); stopCollection = () => {}; collection?.close(); collection = undefined; }
@@ -89,7 +93,7 @@ export function meetingRecords(relay: { snapshot(): WorkspaceConnection; subscri
   attach();
   const stopRelay = relay.subscribe(() => {
     const next = relay.snapshot();
-    if (next.session !== connection.session || next.scope !== connection.scope || next.viewer !== connection.viewer || next.origin !== connection.origin || (!collection && bindable(next))) {
+    if (!same(next, connection) || (!collection && bindable(next) && !(failed && same(failed, next)))) {
       abort.abort(); detach(); connection = next; abort = new AbortController();
       emit({ busy: false, error: "", saved: undefined, pending: false, records: [] }); attach();
     } else void refresh();
