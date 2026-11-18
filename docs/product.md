@@ -23,7 +23,10 @@ notes, the last record, and a Ready to join card with an audio check. Out of the
 call, presence comes from a broker `presence` request. It is gated by the same
 signed workspace admission as joining (access key or trusted proxy for temporary
 meetings), mints no media token, and reads LiveKit `ListRooms` and
-`ListParticipants`.
+`ListParticipants`. The broker advertises it as `presence: true` in its `service` reply.
+An older broker would treat a presence request as an admission and mint a join
+token, so the client polls only when presence is advertised. Otherwise the
+Overview says who's here appears after joining and sends no presence requests.
 
 One plugin-lifetime LiveKit session owns microphone/camera publication, playback
 and screen subscriptions. Changing views keeps it alive. Leaving, changing

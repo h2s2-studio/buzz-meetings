@@ -18,7 +18,7 @@ export function workspaceProof(connection: WorkspaceConnection, current: () => W
     return { event };
   };
 }
-export type MeetingService = { workspaceVoice: boolean; identity?: string; community?: string };
+export type MeetingService = { workspaceVoice: boolean; identity?: string; community?: string; presence?: boolean };
 export function meetingService(broker: string, signal: AbortSignal): Promise<MeetingService> {
   return new Promise((resolve,reject) => {
     const socket = new WebSocket(socketUrl(broker));
@@ -26,7 +26,7 @@ export function meetingService(broker: string, signal: AbortSignal): Promise<Mee
     const finish = (value?: MeetingService) => { if (finished) return; finished = true; clearTimeout(timer); socket.close(); signal.removeEventListener("abort", cancel); if (value) resolve(value); else reject(new Error("Couldn’t load voice availability. Check your meeting service.")); };
     const timer = setTimeout(() => finish(), 8000), cancel = () => finish();
     socket.onopen = () => socket.send(JSON.stringify({ type: "service" }));
-    socket.onmessage = ({data}) => { try { const value = JSON.parse(data); if (value.type !== "service" || value.workspaceVoice && (!/^[a-f0-9]{64}$/.test(value.identity) || typeof value.community !== "string")) return finish(); finish(value); } catch { finish(); } };
+    socket.onmessage = ({data}) => { try { const value = JSON.parse(data); if (value.type !== "service" || value.workspaceVoice && (!/^[a-f0-9]{64}$/.test(value.identity) || typeof value.community !== "string")) return finish(); finish({ workspaceVoice: value.workspaceVoice === true, identity: value.identity, community: value.community, presence: value.presence === true }); } catch { finish(); } };
     socket.onclose = socket.onerror = cancel;
     signal.addEventListener("abort",cancel,{once:true}); if (signal.aborted) cancel();
   });
