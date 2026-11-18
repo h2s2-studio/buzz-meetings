@@ -430,13 +430,14 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-film-tile > .meeting-agent-question[data-compact] { padding: var(--space-3); border-radius: var(--radius-container); background: var(--surface-base); border: 1px solid var(--border-standard); }
 .meeting-tiles .meeting-agent-roster:has(.meeting-agent-question) { padding: var(--space-4); gap: var(--space-3); }
 
-/* Dropdowns: Buzz's input, one chevron, never the platform's own arrow. */
-[class*="meeting-"] select.buzz-input { appearance: none; -webkit-appearance: none; min-height: var(--size-control, 2.25rem); padding-inline: var(--space-3) calc(var(--space-3) + 1.25rem); border-radius: var(--radius-control); cursor: pointer; text-overflow: ellipsis;
+/* Dropdowns: Buzz's input, one chevron, never the platform's own arrow. Only the plugin's own
+   selects carry .meeting-select, so native conversation and Canvas controls are untouched. */
+select.meeting-select { appearance: none; -webkit-appearance: none; min-height: var(--size-control, 2.25rem); padding-inline: var(--space-3) calc(var(--space-3) + 1.25rem); border-radius: var(--radius-control); cursor: pointer; text-overflow: ellipsis;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-subtle) 50%), linear-gradient(135deg, var(--text-subtle) 50%, transparent 50%);
   background-position: calc(100% - var(--space-3) - 0.3rem) 50%, calc(100% - var(--space-3)) 50%; background-size: 0.3rem 0.3rem; background-repeat: no-repeat; }
-[dir="rtl"] [class*="meeting-"] select.buzz-input { background-position: calc(var(--space-3) + 0.3rem) 50%, var(--space-3) 50%; }
-[class*="meeting-"] select.buzz-input:disabled { cursor: default; opacity: 0.6; }
-[class*="meeting-"] select.buzz-input[data-size="sm"] { min-height: var(--size-control-sm, 1.75rem); }
+[dir="rtl"] select.meeting-select { background-position: calc(var(--space-3) + 0.3rem) 50%, var(--space-3) 50%; }
+select.meeting-select:disabled { cursor: default; opacity: 0.6; }
+select.meeting-select[data-size="sm"] { min-height: var(--size-control-sm, 1.75rem); }
 
 /* Expandable rows: a full-width row with a chevron that turns, the same everywhere. */
 details[class^="meeting-"] > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--size-row, 2.25rem); list-style: none; cursor: pointer; color: var(--text-subtle); border-radius: var(--radius-control); }
