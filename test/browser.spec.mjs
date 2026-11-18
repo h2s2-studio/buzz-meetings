@@ -462,6 +462,33 @@ test("keeps a workspace transcript recoverable after leaving and rejoining, and 
   await expect(ended).toHaveCount(0);
   await callbar.getByRole("button", { name: "Leave room", exact: true }).click();
 });
+test("keeps an earlier temporary-meeting transcript reviewable after rejoining, then discards it", async ({ page }, info) => {
+  test.skip(!upstream || !process.env.BUZZ_TEST_LIVE_SPEECH, "Enable real speech recognition for the retained transcript");
+  test.setTimeout(120000);
+  await page.goto(`${fixture}?realm=retained-${info.project.name}&speech&no-agent-runtime&viewer=Alex`);
+  const room = `Retained ${info.project.name}`;
+  await addTemporary(page, room);
+  const row = sidebar(page).getByRole("button", { name: `Join ${room}`, exact: true });
+  await row.click();
+  await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
+  await rail(page, "Transcript");
+  const panel = page.getByRole("complementary", { name: "Meeting transcript", exact: true });
+  const entries = panel.getByRole("region", { name: "Transcript entries" }).getByRole("listitem");
+  await expect.poll(() => entries.count(), { timeout: 45000 }).toBeGreaterThan(0);
+  await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
+  const spoken = await entries.count();
+  await row.click();
+  await expect(controls(page).getByRole("status")).toHaveText("Voice connected", { timeout: 15000 });
+  const earlier = panel.getByRole("group", { name: "Earlier transcript" });
+  await expect(earlier.getByRole("status")).toHaveText("An earlier call’s transcript isn’t saved yet.");
+  await earlier.getByRole("button", { name: "Review earlier transcript", exact: true }).click();
+  await expect(earlier.getByRole("status")).toHaveText("Reviewing an earlier call’s transcript. It isn’t saved yet.");
+  await expect(entries).toHaveCount(spoken);
+  await panel.getByRole("button", { name: "Discard transcript", exact: true }).click();
+  await panel.getByRole("button", { name: "Confirm discard", exact: true }).click();
+  await expect(earlier).toHaveCount(0);
+  await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
+});
 test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
   await proxyWorkspaceVoice(page);

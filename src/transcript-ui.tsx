@@ -11,8 +11,12 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
   let announceByDefault=false;
   try { announceByDefault=localStorage.getItem("meetings-announce-speech")==="true"; } catch { /* Default to quiet reading. */ }
   // `review` shows a transcript kept from an earlier join instead of the live one.
-  return function TranscriptPanel({ roomName, close, review }: { roomName: string; close(): void; review?: RetainedTranscript }) {
+  return function TranscriptPanel({ roomName, close, review: given }: { roomName: string; close(): void; review?: RetainedTranscript }) {
     const live = useSyncExternalStore(transcript.subscribe, transcript.snapshot);
+    // Temporary meetings have no workspace view, so earlier joins kept on rejoin are reviewed here.
+    const earlier = given ? [] : live.retained.filter(item => !item.channelId && item.roomName === roomName);
+    const [picked, setPicked] = useState<string>();
+    const review = given ?? earlier.find(item => item.joinId === picked);
     const state = review ?? live;
     const call = useSyncExternalStore(media.subscribe, media.snapshot);
     const scroll = useRef<HTMLDivElement>(null), following = useRef(true);
@@ -24,6 +28,7 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
     const channelId = state.channelId ?? archive?.channel(roomName);
     const [confirmDiscard, setConfirmDiscard] = useState(false);
     // Saved only when a record in this channel covers the transcript's last entry.
+    useEffect(() => setConfirmDiscard(false), [state.joinId]);
     const savedHere = !!saved?.records.some(record => covers(record.value, channelId, state));
     async function copy() { try { await navigator.clipboard.writeText(text()); setNotice("Transcript copied."); } catch { setNotice("Copy is unavailable. Download the transcript instead."); } }
     function text() { return `${roomName}\n${state.warning ? state.warning+"\n" : ""}${formatTranscript(segments)}`; }
@@ -54,6 +59,8 @@ export function transcriptUI(React: typeof ReactRuntime, transcript: MeetingTran
       if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     }
     return <aside className="meeting-chat meeting-transcript-panel text-body-sm" aria-label="Meeting transcript" data-buzz-ui="">
+      {!given && (review ? <div className="meeting-ended-call" role="group" aria-label="Earlier transcript"><p role="status" className="text-body-sm">{savedHere ? "Reviewing an earlier call’s transcript. It is saved." : "Reviewing an earlier call’s transcript. It isn’t saved yet."}</p><div className="meeting-ended-call-actions"><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => setPicked(undefined)}>Back to this call</button></div></div>
+        : earlier.length > 0 && <div className="meeting-ended-call" role="group" aria-label="Earlier transcript"><p role="status" className="text-body-sm">{earlier.length === 1 ? "An earlier call’s transcript isn’t saved yet." : `${earlier.length} earlier transcripts aren’t saved yet.`}</p><div className="meeting-ended-call-actions"><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" onClick={() => setPicked(earlier[0].joinId)}>Review earlier transcript</button></div></div>)}
       <header className="panel-header"><div className="panel-header-title"><div className="panel-header-label"><h2>Transcript</h2></div></div><div className="panel-header-actions"><button type="button" className="buzz-button" data-buzz-ui="" data-button-shape="icon" data-icon-size="sm" data-icon-shape="control" data-icon-variant="ghost" aria-label="Close transcript" title="Close transcript" onClick={close}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M18 6l-12 12 M6 6l12 12" /></svg></button></div></header>
       <div className="meeting-transcript-controls"><span className="text-caption text-subtle" role="status">{status}</span>{!review && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant={active ? "subtle" : "prominent"} disabled={!active && (call.phase !== "connected" || !call.transcription)} onClick={() => { if (active) transcript.stop(); else void transcript.start(); }}><span className="buzz-button-label">{active ? state.phase === "starting" ? "Cancel transcription" : "Pause transcription" : segments.length ? "Resume transcription" : "Start transcription"}</span></button>}</div>
       {segments.length > 0 && <div className="meeting-transcript-actions"><input className="buzz-input" type="search" aria-label="Search transcript" placeholder="Find in transcript…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => { void copy(); }}>Copy</button><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={download}>Download</button>{channelId && archive && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" disabled={saved?.busy || saved?.pending} onClick={() => { void archive.records.save(channelId,state,archive.agents); }}>Save meeting record</button>}{!active && (!!review || call.phase === "idle") && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => { if (confirmDiscard || savedHere) transcript.discard(state.joinId); else setConfirmDiscard(true); }}>{confirmDiscard ? "Confirm discard" : "Discard transcript"}</button>}</div>}
