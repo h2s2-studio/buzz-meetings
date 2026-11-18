@@ -196,9 +196,13 @@ export function workspaceUI(ctx: WorkspaceContext, liveAgents?: LiveAgents, medi
       setPresence({});
       if (surface !== "overview" || !access || inCall || !voice?.presence || !channel || !service?.workspaceVoice || service.community !== live.origin || !service.identity || !channel.members?.includes(service.identity)) return;
       const abort = new AbortController();
-      const check = () => void voice.presence!(channel, abort.signal).then(value => { if (!abort.signal.aborted) setPresence({ value }); }).catch(problem => { if (!abort.signal.aborted) setPresence(previous => ({ ...previous, error: problem instanceof Error ? problem.message : "Couldn’t check who is in the call." })); });
-      check(); const timer = setInterval(check, 20000);
-      return () => { abort.abort(); clearInterval(timer); };
+      // Each check signs an admission proof: only poll while this window is visible and focused.
+      const shown = () => document.visibilityState === "visible" && document.hasFocus();
+      const check = () => { if (shown()) poll(); };
+      const poll = () => void voice.presence!(channel, abort.signal).then(value => { if (!abort.signal.aborted) setPresence({ value }); }).catch(problem => { if (!abort.signal.aborted) setPresence(previous => ({ ...previous, error: problem instanceof Error ? problem.message : "Couldn’t check who is in the call." })); });
+      poll(); const timer = setInterval(check, 20000);
+      addEventListener("focus", check); document.addEventListener("visibilitychange", check);
+      return () => { abort.abort(); clearInterval(timer); removeEventListener("focus", check); document.removeEventListener("visibilitychange", check); };
     }, [surface, access, inCall, channel?.id, service, live.session]);
     useEffect(() => { if (surface !== "overview") return; const timer = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(timer); }, [surface]);
     const enabled = !!service?.workspaceVoice && service.community === live.origin && !!service.identity && !!channel?.members?.includes(service.identity);

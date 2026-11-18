@@ -352,7 +352,6 @@ export function apply(ctx: Context) {
     if (ui.chatOpen && ui.roomPanel === panel) setChatOpen(false); else showPanel(panel);
   }
   function Controls({ call, compact = false }: { call: RoomSnapshot; compact?: boolean }) {
-    const listening = useSyncExternalStore(liveAgents.subscribe, liveAgents.snapshot);
     const captions = useSyncExternalStore(transcript.subscribe, transcript.snapshot);
     const state = useUI();
     const [busy, setBusy] = useState(false);
@@ -373,11 +372,14 @@ export function apply(ctx: Context) {
       <Button label="Leave room" icon="leave" iconOnly danger onClick={() => media.leave()} />
     </div>;
     const panelOpen = (panel: RoomPanel) => !call.workspaceChannelId && state.chatOpen && state.roomPanel === panel;
-    // Visual order is keyboard order: primary labeled controls, then secondary audio and capture controls.
+    // One control per action, visual order is keyboard order, and Leave comes last.
+    // Pausing transcription lives in the Transcript tab; removing agents in the Agent tab.
     return <div className="meeting-callbar" role="group" aria-label="Meeting controls" data-occurrence={call.occurrenceId}>
       {status}
       <div className="meeting-callbar-primary">
         <LabeledControl text={muteLabel} aria-label={muteLabel} icon={call.muted ? "microphoneOff" : "microphone"} aria-pressed={call.muted} disabled={busy || call.phase !== "connected" || call.deafened} onClick={toggleMute} />
+        <LabeledControl text={call.deafened ? "Undeafen" : "Deafen"} aria-label={call.deafened ? "Undeafen" : "Deafen"} icon={call.deafened ? "headphonesOff" : "headphones"} aria-pressed={call.deafened} disabled={busy || call.phase !== "connected"} onClick={() => { void change(() => media.setDeafened(!call.deafened)); }} />
+        <audio.AudioSettings labeled />
         <LabeledControl text="Camera" aria-label={cameraLabel} icon={call.camera ? "camera" : "cameraOff"} aria-pressed={call.camera} disabled={busy || call.phase !== "connected" || call.cameraPhase === "publishing"} onClick={toggleCamera} />
         <SharingControl call={call} labeled />
         <LabeledControl text="Agent" aria-label="Agent" icon="agent" aria-pressed={panelOpen("agents")} onClick={() => togglePanel(call, "agents")} />
@@ -385,12 +387,6 @@ export function apply(ctx: Context) {
         <span id={editHint} className="sr-only">Available when an agent shares a document or board.</span>
         <LabeledControl text="Transcript" aria-label="Transcript" icon="transcript" aria-pressed={panelOpen("transcript")} onClick={() => togglePanel(call, "transcript")} />
         <LabeledControl text="Leave" aria-label="Leave room" icon="leave" danger onClick={() => media.leave()} />
-      </div>
-      <div className="meeting-callbar-secondary">
-        <Button label={call.deafened ? "Undeafen" : "Deafen"} icon={call.deafened ? "headphonesOff" : "headphones"} iconOnly active={call.deafened} disabled={busy || call.phase !== "connected"} onClick={() => { void change(() => media.setDeafened(!call.deafened)); }} />
-        <audio.AudioSettings />
-        {listening.phase !== "idle" && <Button label="Stop live listening" icon="agent" iconOnly active onClick={() => liveAgents.stop()} />}
-        {capturing && <Button label="Pause transcription" icon="transcript" iconOnly active onClick={() => transcript.stop()} />}
       </div>
     </div>;
   }
@@ -583,7 +579,16 @@ export function apply(ctx: Context) {
     useSyncExternalStore(liveAgents.subscribe, liveAgents.snapshot);
     const label = speakerLabels(call.participants), agents = includedAgents(call), connected = call.phase === "connected";
     const openAgents = () => togglePanel(call, "agents");
-    return <ul className="meeting-filmstrip" aria-label="Filmstrip">
+    // Tiles shrink to a minimum, then the strip scrolls; edge fades show there is more.
+    const strip = useRef<HTMLUListElement>(null), [edges, setEdges] = useState({ start: false, end: false });
+    useEffect(() => {
+      const element = strip.current; if (!element) return;
+      const measure = () => setEdges({ start: element.scrollLeft > 1, end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1 });
+      measure(); element.addEventListener("scroll", measure, { passive: true });
+      const observer = new ResizeObserver(measure); observer.observe(element);
+      return () => { element.removeEventListener("scroll", measure); observer.disconnect(); };
+    }, [call.streams.length, call.participants.length, people, !!call.sharing]);
+    return <ul ref={strip} className="meeting-filmstrip" aria-label="Filmstrip" data-fade-start={edges.start || undefined} data-fade-end={edges.end || undefined}>
       {call.sharing && <li className="meeting-film-tile" data-kind="screen"><button type="button" className="meeting-film-pick" aria-label="Show your screen on stage" aria-pressed={state.stageChoice === "your-screen"} onClick={() => chooseStage("your-screen")}><Video stream={call.sharing.preview} label="Your stream preview" /><span className="meeting-film-caption"><span className="meeting-film-name">{call.sharing.label} · Your screen</span><span className="meeting-live">Live</span></span></button><Button label="Change source" icon="screen" iconOnly variant="ghost" disabled={call.picking || call.stopping || !connected} onClick={() => { void media.share(state.preset, state.shareSound); }} /></li>}
       {call.streams.map(stream => <li className="meeting-film-tile" data-kind="screen" key={stream.id}><button type="button" className="meeting-film-pick" aria-label={`Watch ${stream.presenter}’s stream`} aria-pressed={state.stageChoice === `screen:${stream.id}`} disabled={!connected} onClick={() => chooseStage(`screen:${stream.id}`)}><span className="meeting-film-glyph"><Icon name="screen" /></span><span className="meeting-film-caption"><span className="meeting-film-name">{stream.presenter}’s screen</span><span className="meeting-live">Live</span></span></button></li>)}
       {call.streams.length > 1 && <li className="meeting-film-tile" data-kind="screen"><button type="button" className="meeting-film-pick" aria-label="Watch all screens" aria-pressed={state.stageChoice === "all-screens"} onClick={() => chooseStage("all-screens")}><span className="meeting-film-glyph"><Icon name="expand" /></span><span className="meeting-film-caption"><span className="meeting-film-name">All screens</span></span></button></li>}
@@ -611,7 +616,7 @@ export function apply(ctx: Context) {
         <div className="meeting-stage" ref={stage} data-focused={focused || undefined}>
           {localScreen ? <div className="meeting-focused-screen"><Video stream={localScreen.preview} label="Your screen on stage" /><div className="meeting-focused-caption"><span className="text-body-sm">Your screen</span><div className="meeting-view-actions">{fullscreen}<Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
             : person ? <div className={`meeting-focused-screen${person.video ? "" : " meeting-focused-person"}`}>{person.video ? <Video stream={person.video} label={`${person.name}’s camera on stage`} /> : <Avatar person={person} large />}<span className="text-body-sm">{person.name}</span><Button label="Back to participants" variant="ghost" onClick={() => chooseStage("participants")} /></div>
-            : allScreens ? <div className="meeting-screen-grid">{call.screens.map(screen => <button type="button" className="meeting-screen-tile" key={screen.id} aria-label={`Focus ${screen.presenter}’s screen`} onClick={() => chooseStage(`screen:${screen.id}`)}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></button>)}<div className="meeting-view-actions"><Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div>
+            : allScreens ? <div className="meeting-all-screens"><div className="meeting-screen-grid" data-count={Math.min(call.screens.length, 4)}>{call.screens.map(screen => <button type="button" className="meeting-screen-tile" key={screen.id} aria-label={`Focus ${screen.presenter}’s screen`} onClick={() => chooseStage(`screen:${screen.id}`)}><Video stream={screen.video} label={`${screen.presenter}’s screen`} /><div className="meeting-screen-caption"><Icon name="screen" /><span>{screen.presenter}’s screen</span><span className="meeting-live">Live</span></div></button>)}</div><div className="meeting-focused-caption"><span className="text-body-sm">All screens</span><div className="meeting-view-actions">{fullscreen}<Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
             : remoteScreen ? <div className="meeting-focused-screen"><Video stream={remoteScreen} label="Shared screen" /><div className="meeting-focused-caption"><span className="text-body-sm">{watching?.presenter}’s screen <span className="meeting-live">Live</span></span><div className="meeting-view-actions"><label className="sr-only" htmlFor="meeting-view-quality">Viewer quality</label><select className="buzz-input" id="meeting-view-quality" data-size="sm" value={call.quality} onChange={event => media.quality(event.target.value === "auto" ? "auto" : Number(event.target.value))}><option value="auto">Auto quality</option>{call.layers.map(layer => <option key={layer.value} value={layer.value}>{layer.height}p</option>)}</select>{fullscreen}<Button label="Stop watching" variant="ghost" onClick={() => chooseStage("participants")} /></div></div></div>
             : call.participants.length ? <Roster call={call} tiles /> : call.phase === "connecting" ? <div className="meeting-empty" role="status"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Joining {call.roomName}…</h3><p className="text-body-sm text-subtle">Connecting to the room and preparing your microphone.</p><Button label="Cancel joining" icon="close" onClick={() => media.leave()} /></div> : <div className="meeting-empty"><div className="meeting-empty-icon"><Icon name="headphones" /></div><h3 className="text-body-lg">Make room for a conversation</h3><p className="text-body-sm text-subtle">{state.selected ? `Join ${state.selected} to talk, share a screen, or work through something together.` : "Start a meeting to talk, share a screen, or work through something together."}</p><Button label={state.selected ? `Join ${state.selected}` : "Manage temporary meetings"} icon={state.selected ? "headphones" : "plus"} variant="prominent" onClick={() => state.selected ? join(state.selected) : openManagement()} />{state.selected && <span className="text-caption text-metadata">Join with your saved audio settings.</span>}</div>}
           {fullscreenError && <p role="alert" className="text-body-sm text-danger">{fullscreenError}</p>}

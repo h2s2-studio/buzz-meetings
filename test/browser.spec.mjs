@@ -709,9 +709,12 @@ test("delivers overlapping live speakers to an agent with timestamps and records
   // Panel remounts intentionally: choose the agent for a fresh assignment.
   await panel.getByRole("button", { name: "Add Research helper to call", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Listening · ready for spoken tasks");
-  await controls(page).getByRole("button", { name: "Pause transcription", exact: true }).click();
+  // Pausing lives in the Transcript tab; the agent's input stops with it.
+  await rail(page, "Transcript");
+  await transcript.getByRole("button", { name: "Pause transcription", exact: true }).click();
+  await rail(page, "Agent");
   await expect(panel.getByRole("alert")).toContainText("transcription paused");
-  await expect(controls(page).getByRole("button", { name: "Stop live listening", exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /^Remove Research helper/ })).toHaveCount(0);
   expect(await page.evaluate(() => meetingTest.microphoneStates())).toEqual(["live"]);
   await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
   await controls(other).getByRole("button", { name: "Leave room", exact: true }).click();
@@ -738,7 +741,9 @@ test("completes a task after the agent stops listening and opens its result from
   await expect(remove).toHaveAccessibleDescription("Removing it also stops transcription here. Open Transcript first to keep it running.");
   await remove.click();
   await expect(remove).toHaveCount(0);
-  await expect(controls(page).getByRole("button", { name: "Pause transcription", exact: true })).toHaveCount(0);
+  await rail(page, "Transcript");
+  await expect(page.getByRole("complementary", { name: "Meeting transcript", exact: true }).getByRole("status").first()).toHaveText(/^Paused for you/);
+  await rail(page, "Agent");
   // The agent finishes after listening stopped; the meeting reflects it.
   await page.evaluate(args => meetingTest.callAgentTool("meetings_task_record", args), { ...task, status: "done", result: "Brief posted in the thread." });
   await expect(panel).toContainText("Research helper · Done · Saved in chat");

@@ -11,7 +11,7 @@ export function audioSettings(React: typeof ReactRuntime, media: ReturnType<type
   }
   load();
   // `inline` renders the same choices as a pre-join audio check instead of a popover.
-  function AudioSettings({ inline = false }: { inline?: boolean } = {}) {
+  function AudioSettings({ inline = false, labeled = false }: { inline?: boolean; labeled?: boolean } = {}) {
     load();
     const id = React.useId(), anchor = React.useRef<HTMLButtonElement>(null), drawer = React.useRef<HTMLDivElement>(null);
     const [prefs,setPrefs] = React.useState(media.audioPreferences), [devices,setDevices] = React.useState<MediaDeviceInfo[]>([]), [testing,setTesting] = React.useState(false), [level,setLevel] = React.useState(0), [busy,setBusy] = React.useState(false), [error,setError] = React.useState("");
@@ -61,7 +61,10 @@ export function audioSettings(React: typeof ReactRuntime, media: ReturnType<type
         {call.deafened && <p className="text-caption text-metadata">Deafened. Turning hearing back on leaves your microphone muted.</p>}{error && <p role="alert" className="text-danger">{error}</p>}
       </>;
     if (inline) return <section className="meeting-audio-check text-body-sm" aria-label="Audio check">{fields}</section>;
-    return <><button ref={anchor} type="button" className="buzz-button meeting-control" data-buzz-ui="" data-button-shape="icon" data-icon-size="sm" data-icon-shape="control" data-icon-variant="ghost" aria-label="Audio settings" title="Audio settings" popoverTarget={id} onClick={position}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button>
+    // Labeled in the call bar (visible text inside the accessible name); icon-only elsewhere.
+    return <>{labeled
+      ? <button ref={anchor} type="button" className="buzz-button meeting-labeled-control" data-buzz-ui="" data-variant="ghost" aria-label="Audio settings" popoverTarget={id} onClick={position}><span className="meeting-labeled-control-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 8h10M18 8h2M4 16h4M12 16h8M16 6v4M10 14v4" /></svg></span><span className="meeting-labeled-control-text">Audio</span></button>
+      : <button ref={anchor} type="button" className="buzz-button meeting-control" data-buzz-ui="" data-button-shape="icon" data-icon-size="sm" data-icon-shape="control" data-icon-variant="ghost" aria-label="Audio settings" title="Audio settings" popoverTarget={id} onClick={position}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button>}
       <div ref={drawer} id={id} popover="auto" className="meeting-audio-drawer text-body-sm" role="dialog" aria-label="Audio settings"><header><h3>Audio settings</h3><button type="button" className="buzz-button" data-buzz-ui="" popoverTarget={id} popoverTargetAction="hide" aria-label="Close audio settings">×</button></header>
         {fields}
       </div></>;

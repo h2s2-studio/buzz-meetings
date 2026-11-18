@@ -306,3 +306,28 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-footer > .meeting-callbar { flex: 1 1 auto; }
 .meeting-tiles .meeting-agent-roster { background: var(--meeting-agent-surface); color: var(--meeting-agent-text); }
 .meeting-tiles .meeting-agent-roster .meeting-avatar { background: transparent; color: var(--meeting-agent-accent); }
+
+/* "All screens" splits the whole stage; each tile letterboxes its share. */
+.meeting-all-screens { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.meeting-all-screens > .meeting-screen-grid { flex: 1; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); grid-auto-rows: minmax(0, 1fr); align-items: stretch; }
+.meeting-all-screens > .meeting-screen-grid[data-count="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.meeting-all-screens .meeting-screen-tile { display: flex; flex-direction: column; min-height: 0; }
+.meeting-all-screens .meeting-screen-tile video { flex: 1; min-height: 0; height: 100%; aspect-ratio: auto; object-fit: contain; }
+.meeting-all-screens .meeting-screen-caption { flex: 0 0 auto; }
+
+/* Filmstrip: fit down to a minimum width, then scroll with an edge fade. */
+.meeting-film-tile { flex: 1 1 9.5rem; min-width: 7rem; max-width: 11rem; }
+.meeting-filmstrip { scroll-padding-inline: var(--space-4); }
+.meeting-filmstrip[data-fade-end] { mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent); }
+.meeting-filmstrip[data-fade-start] { mask-image: linear-gradient(to left, #000 calc(100% - 3rem), transparent); }
+.meeting-filmstrip[data-fade-start][data-fade-end] { mask-image: linear-gradient(to right, transparent, #000 3rem, #000 calc(100% - 3rem), transparent); }
+@container meeting (max-width: 52rem) { .meeting-film-tile { flex-basis: 7rem; } }
+@container meeting (max-width: 52rem) {
+  .meeting-labeled-control { min-width: 3rem; padding-inline: 0; gap: 2px; }
+  .meeting-callbar-primary { gap: 0; }
+  .meeting-footer { padding-inline: var(--space-2); }
+}
+@container meeting (max-width: 52rem) {
+  .meeting-callbar-primary { gap: var(--space-1); }
+  .meeting-labeled-control-text { white-space: normal; max-width: 3.75rem; text-align: center; }
+}
