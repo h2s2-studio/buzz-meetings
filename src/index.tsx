@@ -14,7 +14,7 @@ import { agentIcon } from "./agent-icon";
 import css from "./meeting.css";
 import { workspaceUI, type PageNavigation, type WorkspaceContext } from "./workspace-ui";
 import { readable, type Channel } from "./workspaces";
-import { workspaceProof } from "./workspace-voice";
+import { requestPresence, workspaceProof } from "./workspace-voice";
 import type { Storage, WorkspaceSession } from "./workspaces";
 
 type Profile = { name?: string; picture?: string };
@@ -89,7 +89,8 @@ export function apply(ctx: Context) {
   const Transcript = transcriptUI(React, transcript, media, { records, agents:liveAgents, channel:roomChannel });
   ctx.effect(() => () => { transcript.close(); records.close(); });
   const workspaces = workspaceUI(ctx, liveAgents, media, { broker: () => broker, join: joinWorkspace, Transcript, startTranscript:openTranscript, Call: WorkspaceCall, Roster: WorkspaceRoster, Records, transcript, records,
-    temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() } });
+    temporary: { Rows: TemporaryRows, count: () => rooms.length, add: addTemporary, manage: () => openManagement() },
+    presence: workspacePresence, AudioCheck: () => <audio.AudioSettings inline /> });
   const listeners = new Set<() => void>();
   let connection = ctx.relay.snapshot();
   const storageKey = () => `studio.h2s2.meeting:${connection.scope || connection.origin}:${connection.viewer}:rooms`;
@@ -210,6 +211,12 @@ export function apply(ctx: Context) {
     try { saved = localStorage.getItem(`studio.h2s2.meetings:chat:${current.scope}:${roomKey(room)}`); } catch { /* A matching channel can still be used. */ }
     const matches = channels.filter(channel => roomKey(channel.name) === roomKey(room));
     return channels.find(channel => channel.id === saved)?.id ?? (matches.length === 1 ? matches[0].id : undefined);
+  }
+  // Pre-join presence uses the same signed workspace admission as joining, but mints no media token.
+  function workspacePresence(channel: Channel, signal: AbortSignal) {
+    const current = ctx.relay.snapshot(), profile = current.viewer ? current.session.profiles.snapshot().get(current.viewer) : undefined;
+    if (!current.origin || !current.viewer || current.status !== "ready" || !readable(channel, current.viewer)) return Promise.reject(new Error("Reconnect to see who is in the call."));
+    return requestPresence(socketUrl(broker), { type: "workspace", channel: channel.id, community: current.origin, room: channel.name, name: (profile?.name || "Participant").slice(0,48), presence: true }, signal, workspaceProof(current, ctx.relay.snapshot));
   }
   async function joinWorkspace(channel: Channel) {
     const current = ctx.relay.snapshot();

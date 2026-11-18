@@ -403,6 +403,7 @@ async function proxyWorkspaceVoice(page) {
       const request = JSON.parse(raw);
       if (request.type === "service") return socket.send(JSON.stringify({ type: "service", workspaceVoice: true, identity: serviceIdentity, community: new URL(fixture).origin }));
       if (!server) { server = socket.connectToServer(); server.onMessage(message => socket.send(message)); }
+      if (request.type === "workspace" && request.presence) return server.send(JSON.stringify({ type: "presence", community: new URL(request.community).origin + "/", room: `workspace ${request.channel}`.slice(0, 64) }));
       if (request.type === "workspace") {
         const { name, community, channel, picture, captions } = request;
         return server.send(JSON.stringify({ type: captions ? "captions" : "meeting", name, community: new URL(community).origin + "/", room: `workspace ${channel}`.slice(0, 64), ...(picture ? { picture } : {}) }));
@@ -488,6 +489,35 @@ test("keeps an earlier temporary-meeting transcript reviewable after rejoining, 
   await panel.getByRole("button", { name: "Confirm discard", exact: true }).click();
   await expect(earlier).toHaveCount(0);
   await controls(page).getByRole("button", { name: "Leave room", exact: true }).click();
+});
+test("shows who is in a workspace call before joining, with an audio check and no microphone request", async ({ page, browser }, info) => {
+  test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);
+  const realm = `overview-${info.project.name}`, other = await browser.newContext({ permissions: ["microphone", "camera"] }), riley = await other.newPage();
+  try {
+    for (const client of [page, riley]) await proxyWorkspaceVoice(client);
+    await Promise.all([page.goto(`${fixture}?realm=${realm}&viewer=Alex`), riley.goto(`${fixture}?realm=${realm}&viewer=Riley`)]);
+    await linkGeneral(page);
+    const view = workspace(page);
+    await expect(view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(view.getByRole("heading", { name: "No one is in the call" })).toBeVisible({ timeout: 15000 });
+    await view.getByRole("button", { name: "Enable voice & join", exact: true }).click();
+    await expect(view.getByRole("group", { name: "Meeting controls" }).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+    await view.getByRole("group", { name: "Meeting controls" }).getByRole("button", { name: "Leave room", exact: true }).click();
+    await workspaces(riley).getByRole("button", { name: "General Voice", exact: true }).click();
+    const rileyView = workspace(riley);
+    await rileyView.getByRole("button", { name: "Join voice", exact: true }).click();
+    await expect(rileyView.getByRole("group", { name: "Meeting controls" }).getByRole("status").filter({ hasText: "Voice connected" })).toBeVisible({ timeout: 15000 });
+    await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: "Overview", exact: true }).click();
+    await expect(view.getByRole("heading", { name: "A call is in progress" })).toBeVisible({ timeout: 30000 });
+    await expect(view.getByRole("region", { name: "In the call" })).toContainText("Riley");
+    await expect(view.getByRole("status").filter({ hasText: /updated (just now|\d+ s ago)/ })).toBeVisible();
+    const join = view.getByRole("complementary", { name: "Ready to join" });
+    await expect(join.getByRole("region", { name: "Audio check" }).getByLabel("Join with microphone muted")).toBeVisible();
+    await expect(join.getByRole("button", { name: "Join voice", exact: true })).toBeEnabled();
+    await expect(view.getByRole("region", { name: "Agenda" }).getByLabel("Shared notes")).toBeVisible();
+    expect(await page.evaluate(() => meetingTest.microphoneRequests())).toBe(1);
+    if (info.project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-overview.png" });
+  } finally { await other.close(); }
 });
 test("keeps a same-name quick room and workspace distinct across selection, rename and return from Messages", async ({ page }, info) => {
   test.skip(!upstream, "Run npm run test:media to exercise the real SFU and Rust broker"); test.setTimeout(90000);

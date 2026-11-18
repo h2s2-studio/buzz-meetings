@@ -280,3 +280,23 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-rail-tabs { min-width: 0; flex-wrap: wrap; }
 .meeting-rail-tabs .buzz-button { padding-inline: var(--space-2); }
 .meeting-rail-header > .buzz-button { flex: 0 0 auto; }
+
+/* Workspace Overview (screen 1): call status and agenda beside a join card. */
+.meeting-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem); gap: var(--space-6); align-content: start; padding: var(--space-panel-inset); overflow: auto; }
+.meeting-overview-main { display: grid; gap: var(--space-4); align-content: start; min-width: 0; }
+.meeting-overview-main h3, .meeting-overview-main h4, .meeting-overview-main p { margin: 0; }
+.meeting-overview-main section { display: grid; gap: var(--space-2); }
+.meeting-overview-people { list-style: none; margin: 0; padding: 0; display: grid; }
+.meeting-overview-people li { display: flex; gap: var(--space-3); align-items: center; padding-block: var(--space-2); border-bottom: 1px solid var(--border-standard); }
+.meeting-overview-people li > div { display: grid; gap: var(--space-1); min-width: 0; }
+.meeting-overview-people .meeting-avatar { width: 2rem; height: 2rem; }
+.meeting-overview-people li[data-agent] .meeting-avatar { background: var(--meeting-agent-surface); color: var(--meeting-agent-text); }
+.meeting-agent-badge { display: inline-block; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--meeting-agent-surface); color: var(--meeting-agent-text); }
+.meeting-overview-agenda > :last-child { min-height: 10rem; max-height: 18rem; border-radius: var(--radius-container); background: var(--surface-inset); }
+.meeting-overview-join { display: grid; gap: var(--space-3); align-content: start; padding: var(--space-4); border-radius: var(--radius-container); background: var(--surface-inset); }
+.meeting-overview-join h4, .meeting-overview-join p { margin: 0; }
+.meeting-audio-check { display: grid; gap: var(--space-3); }
+.meeting-audio-check label { display: grid; gap: var(--space-2); }
+.meeting-audio-check .meeting-sharing-sound { display: flex; align-items: center; }
+@container meeting (max-width: 48rem) { .meeting-overview { grid-template-columns: minmax(0, 1fr); } }
+.meeting-overview-join { align-self: start; }
