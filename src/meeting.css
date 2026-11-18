@@ -331,3 +331,12 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
   .meeting-callbar-primary { gap: var(--space-1); }
   .meeting-labeled-control-text { white-space: normal; max-width: 3.75rem; text-align: center; }
 }
+
+/* Filmstrip people: the tile border already shows who is speaking, so the avatar
+   drops its ring and shrinks in narrow panes instead of overlapping the name. */
+.meeting-film-tile .meeting-avatar[data-speaking] { outline: none; }
+.meeting-film-glyph { overflow: hidden; }
+@container meeting (max-width: 52rem) { .meeting-film-tile .meeting-avatar[data-large] { width: 1.5rem; height: 1.5rem; font-size: var(--text-caption); } }
+/* The viewer-quality menu keeps its label; the caption actions wrap instead. */
+.meeting-view-actions { flex-wrap: wrap; justify-content: flex-end; }
+.meeting-view-actions select { flex: 0 0 auto; min-width: 8rem; }
