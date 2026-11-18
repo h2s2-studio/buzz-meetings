@@ -128,6 +128,10 @@ export function makeLiveAgents(ctx: { agents?: AgentRuntime; relay: { snapshot()
       if (call.occurrenceId !== occurrence && (call.occurrenceId || call.phase === "idle")) { occurrence = call.occurrenceId; emit(); }
       for (const run of [...active.values()]) {
         if (call.joinId !== run.joinId || call.phase === "idle") stop("", run.agent.pubkey);
+        // The SID can arrive after Add. A value-to-value change means a new call occurrence:
+        // end the session rather than file later tasks under the old one.
+        else if (!run.occurrenceId && call.occurrenceId) { run.occurrenceId = call.occurrenceId; emit(); }
+        else if (run.occurrenceId && call.occurrenceId && call.occurrenceId !== run.occurrenceId) stop(`${run.agent.name} stopped listening because the call restarted on the meeting service. Add it again to continue.`, run.agent.pubkey);
         else if (!allowed(run)) stop("Listening stopped because channel access changed.", run.agent.pubkey);
       }
     });

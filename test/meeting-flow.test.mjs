@@ -100,3 +100,18 @@ test("rejoining keeps the earlier unsaved transcript reviewable and savable unde
   flow.transcript.reset(); assert.deepEqual(flow.transcript.snapshot().retained, []);
   flow.close();
 });
+
+test("an agent added before the call's occurrence is known files tasks under it, and a restarted call ends the session", async () => {
+  const flow = meetingFlow();
+  flow.join(undefined); await flow.addAgent();
+  await flow.task({ key: "early", title: "Early task", status: "working" });
+  flow.setOccurrence("RM_late");
+  assert.deepEqual(flow.agents.tasksFor(general, "RM_late").map(task => task.title), ["Early task"]);
+  assert.deepEqual(flow.agents.snapshot().tasks.map(task => task.title), ["Early task"]);
+  flow.setOccurrence("RM_restarted");
+  assert.equal(flow.agents.snapshot().phase, "idle");
+  assert.match(flow.agents.snapshot().error, /call restarted/);
+  assert.deepEqual(flow.agents.tasksFor(general, "RM_restarted"), []);
+  assert.deepEqual(flow.agents.tasksFor(general, "RM_late").map(task => task.title), ["Early task"]);
+  flow.close();
+});
