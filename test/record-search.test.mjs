@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { meetingFlow, general, identities, settle } from "./meeting-flow.mjs";
 import { design } from "./workspace-host.mjs";
 const built = await build({ entryPoints: ["src/record-search.ts"], bundle: true, format: "esm", platform: "node", write: false });
-const { registerRecordSearch, excerpts, searchTerms } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
+const { registerRecordSearch, excerpts, searchTerms, cacheBudget, readBudget } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
 
 // Two saved meetings: one in General Voice, one in Design. The agent (Riley's key) searches as Alex's agent.
 async function twoMeetings() {
@@ -75,4 +75,58 @@ test("excerpts are bounded and terms are deduplicated", () => {
   const text = Array.from({ length: 9 }, (_, index) => `[t] A: bridge ${index} ${"x".repeat(400)}`).join("\n\n");
   const found = excerpts(text, ["bridge"]);
   assert.equal(found.length, 5); assert.ok(found.every(entry => entry.length <= 301));
+});
+
+test("punctuation in a query does not prevent a match, and timestamps are not searched", async () => {
+  const { flow, search } = await twoMeetings();
+  assert.deepEqual(searchTerms("bridge shadow?"), ["bridge", "shadow"]);
+  assert.equal((await search({ query: "bridge shadow?" })).results.length, 1);
+  assert.equal((await search({ query: "“Thursday.”" })).results.length, 1);
+  // The entry timestamps are in 2023; a year must not match every entry.
+  assert.deepEqual((await search({ query: "2023" })).results, []);
+  // The speaker is still searchable with what they said.
+  assert.equal((await search({ query: "Riley bridge" })).results.length, 1);
+  flow.close();
+});
+
+// A scripted records source: `count` records, each with `parts` saved parts and `size` characters of transcript.
+function scripted(count, parts, size) {
+  const flow = meetingFlow(), reads = [];
+  const all = Array.from({ length: count }, (_, index) => ({ id: `record-${index}`, value: { channelId: general, title: `Meeting ${index}`, capturedAt: 1_700_000_000_000 - index, tasks: [], parts: Array.from({ length: parts }, () => ({})) } }));
+  const records = { snapshot: () => ({ records: all }), async read(id) { reads.push(id); return `[t] Riley: needle ${id} ${"x".repeat(size)}`; } };
+  registerRecordSearch({ agents: { addTool: tool => flow.tools.set(tool.name, tool) }, relay: { snapshot: flow.connection.current } }, records);
+  const search = args => flow.tools.get("meetings_search_records").call({ key: flow.agent.key, pubkey: flow.agent.pubkey, owner: identities.Alex }, {}, args).then(JSON.parse);
+  return { flow, reads, search };
+}
+
+test("one search reads a bounded number of saved parts and says what it left unread", async () => {
+  const { flow, reads, search } = scripted(20, 16, 10);
+  const first = await search({ query: "needle", limit: 10 });
+  // 16 parts per record against a budget of 40: two records read, the rest deferred.
+  assert.equal(reads.length, Math.floor(readBudget / 16)); assert.equal(first.results.length, reads.length);
+  assert.equal(first.transcriptsNotReadThisSearch, 20 - reads.length); assert.match(first.note, /not read in this search/);
+  // The next search reuses what was read and spends its budget on new records.
+  const second = await search({ query: "needle", limit: 10 });
+  assert.equal(reads.length, 2 * Math.floor(readBudget / 16)); assert.equal(second.results.length, reads.length);
+  assert.equal(new Set(reads).size, reads.length);
+  flow.close();
+});
+
+test("cached transcripts are bounded by total size, not by count", async () => {
+  const size = Math.floor(cacheBudget / 2.5);
+  // Two transcripts fit the budget: a repeat search reads nothing.
+  const fits = scripted(2, 1, size);
+  await fits.search({ query: "needle", limit: 10 }); await fits.search({ query: "needle", limit: 10 });
+  assert.equal(fits.reads.length, 2); fits.flow.close();
+  // Four do not: the cache keeps at most two, so a repeat search has to read again.
+  const over = scripted(4, 1, size);
+  await over.search({ query: "needle", limit: 10 });
+  assert.equal(over.reads.length, 4);
+  await over.search({ query: "needle", limit: 10 });
+  assert.ok(over.reads.length >= 6, `expected evicted transcripts to be read again, saw ${over.reads.length} reads`);
+  // A transcript larger than the whole budget is never kept.
+  const huge = scripted(1, 1, cacheBudget + 1);
+  await huge.search({ query: "needle" }); await huge.search({ query: "needle" });
+  assert.equal(huge.reads.length, 2); huge.flow.close();
+  over.flow.close();
 });
