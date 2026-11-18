@@ -121,7 +121,7 @@ function place(content: ArtifactContent, node: ArtifactNode, after: string | nul
 }
 function setFields(kind: ArtifactKind, node: ArtifactNode, fields: NodeFields) {
   const allowed = updatable[shapeOf(kind, node)];
-  if (!fields || typeof fields !== "object" || !Object.keys(fields).length || !Object.keys(fields).every(key => allowed.includes(key))) fail("That change isn't allowed for this item.");
+  if (!fields || typeof fields !== "object" || !Object.keys(fields).length || !Object.keys(fields).every(key => allowed.includes(key))) fail("That change isn’t allowed for this item.");
   const target = node as Record<string, unknown>;
   for (const [key, value] of Object.entries(fields)) if (value === null) delete target[key]; else target[key] = value;
 }
