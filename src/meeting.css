@@ -300,3 +300,9 @@ button.meeting-screen-tile { padding: 0; border: 0; text-align: inherit; cursor:
 .meeting-audio-check .meeting-sharing-sound { display: flex; align-items: center; }
 @container meeting (max-width: 48rem) { .meeting-overview { grid-template-columns: minmax(0, 1fr); } }
 .meeting-overview-join { align-self: start; }
+/* The status sits in the footer's flow so a wide control bar never covers it. */
+.meeting-footer { justify-content: space-between; flex-wrap: wrap; }
+.meeting-footer-status { position: static; flex: 0 1 auto; }
+.meeting-footer > .meeting-callbar { flex: 1 1 auto; }
+.meeting-tiles .meeting-agent-roster { background: var(--meeting-agent-surface); color: var(--meeting-agent-text); }
+.meeting-tiles .meeting-agent-roster .meeting-avatar { background: transparent; color: var(--meeting-agent-accent); }
