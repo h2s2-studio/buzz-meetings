@@ -28,7 +28,9 @@ export type ArtifactKind = "document" | "board";
 export type DocumentNode = { id: string; type: "heading" | "paragraph" | "list" | "link"; text: string; href?: string; author: string; editedAt: number };
 export type BoardNode = { id: string; type: "card" | "group" | "connector"; text?: string; x?: number; y?: number; w?: number; h?: number; groupId?: string; from?: string; to?: string; author: string; editedAt: number };
 export type ArtifactNode = DocumentNode | BoardNode;
-export type ArtifactContent = { version: 1; kind: ArtifactKind; title: string; createdBy: string; occurrenceId?: string; nodes: ArtifactNode[]; ops: string[] };
+/** What a document was made from: a board revision and the cards chosen ("Turn into a brief"). */
+export type ArtifactSource = { artifactId: string; revision: string; nodeIds: string[] };
+export type ArtifactContent = { version: 1; kind: ArtifactKind; title: string; createdBy: string; occurrenceId?: string; source?: ArtifactSource; nodes: ArtifactNode[]; ops: string[] };
 
 /** Fields an update may change; which apply depends on the node type (see `updatable`). */
 export type NodeFields = { text?: string; href?: string | null; type?: string; w?: number; h?: number; from?: string; to?: string };
@@ -68,8 +70,8 @@ const stored: Record<string, readonly string[]> = {
 const updatable: Record<string, readonly string[]> = { document: ["text", "href", "type"], card: ["text", "w", "h"], group: ["text", "w", "h"], connector: ["from", "to"] };
 const shapeOf = (kind: ArtifactKind, node: ArtifactNode) => kind === "document" ? "document" : node.type;
 
-export function createContent(input: { kind: ArtifactKind; title: string; createdBy: string; occurrenceId?: string }): ArtifactContent {
-  const content: ArtifactContent = { version: 1, kind: input.kind, title: input.title.trim().slice(0, titleLimit), createdBy: input.createdBy, ...(input.occurrenceId ? { occurrenceId: input.occurrenceId } : {}), nodes: [], ops: [] };
+export function createContent(input: { kind: ArtifactKind; title: string; createdBy: string; occurrenceId?: string; source?: ArtifactSource }): ArtifactContent {
+  const content: ArtifactContent = { version: 1, kind: input.kind, title: input.title.trim().slice(0, titleLimit), createdBy: input.createdBy, ...(input.occurrenceId ? { occurrenceId: input.occurrenceId } : {}), ...(input.source ? { source: input.source } : {}), nodes: [], ops: [] };
   return validateContent(content);
 }
 
@@ -92,7 +94,8 @@ function validNode(kind: ArtifactKind, node: ArtifactNode, nodes: Map<string, Ar
 export function validateContent(content: ArtifactContent): ArtifactContent {
   const nodes = new Map((Array.isArray(content?.nodes) ? content.nodes : []).map(node => [node?.id, node] as const));
   if (!content || content.version !== 1 || !["document", "board"].includes(content.kind) || typeof content.title !== "string" || content.title.length > titleLimit
-    || !hex.test(content.createdBy) || (content.occurrenceId !== undefined && typeof content.occurrenceId !== "string") || !Array.isArray(content.nodes) || content.nodes.length > nodeLimit
+    || !hex.test(content.createdBy) || (content.occurrenceId !== undefined && typeof content.occurrenceId !== "string")
+    || (content.source !== undefined && !(content.kind === "document" && uuid.test(content.source?.artifactId) && hex.test(content.source.revision) && Array.isArray(content.source.nodeIds) && content.source.nodeIds.length <= nodeLimit && content.source.nodeIds.every(id => uuid.test(id)) && Object.keys(content.source).length === 3)) || !Array.isArray(content.nodes) || content.nodes.length > nodeLimit
     || nodes.size !== content.nodes.length || !content.nodes.every(node => validNode(content.kind, node, nodes)) || !Array.isArray(content.ops) || content.ops.length > opHistory || !content.ops.every(op => typeof op === "string" && uuid.test(op)))
     fail();
   return content;
