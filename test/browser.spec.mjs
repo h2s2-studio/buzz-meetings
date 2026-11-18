@@ -1123,6 +1123,57 @@ test("edits a shared document, holds a clash for Keep mine / Keep theirs / Compa
   await expect(list.getByRole("button", { name: /Turn 3 playtest brief/ })).toContainText("Document · revision");
   await expect(view.getByRole("group", { name: "Library" }).getByRole("button", { name: /^Documents & boards/ })).toContainText("Preview");
 });
+test("builds a board by pointer and keyboard, then turns selected cards into a linked brief", async ({ page }) => {
+  await page.goto(`${fixture}?realm=board`);
+  await linkGeneral(page);
+  const view = workspace(page);
+  await view.getByRole("group", { name: "Workspace views" }).getByRole("button", { name: /^Documents & boards/ }).click();
+  await view.getByRole("button", { name: "New board", exact: true }).click();
+  const board = view.getByRole("region", { name: /^Board: / });
+  const toolbar = board.getByRole("toolbar", { name: "Board" });
+  for (const text of ["Move the braking marker", "Brighter kerb paint", "Show the radius on the minimap"]) {
+    await toolbar.getByRole("button", { name: "Add card", exact: true }).click();
+    const input = board.getByLabel("Card text", { exact: true });
+    await input.fill(text); await input.press("Enter");
+    await expect(board.getByRole("button", { name: `Card: ${text}`, exact: true })).toBeVisible();
+  }
+  const card = text => board.getByRole("button", { name: `Card: ${text}`, exact: true });
+  // Select two by clicking, group and connect them.
+  await card("Move the braking marker").click();
+  await card("Brighter kerb paint").click({ modifiers: ["Shift"] });
+  await toolbar.getByRole("button", { name: "Group", exact: true }).click();
+  const name = board.getByLabel("Group name", { exact: true }); await name.fill("Visibility"); await name.press("Enter");
+  await card("Move the braking marker").click();
+  await card("Show the radius on the minimap").click({ modifiers: ["Shift"] });
+  await toolbar.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(board.locator(".meeting-board-links line")).toHaveCount(1);
+  // Drag a card; one move is saved where it was dropped.
+  const before = await card("Show the radius on the minimap").boundingBox();
+  await page.mouse.move(before.x + 20, before.y + 20); await page.mouse.down(); await page.mouse.move(before.x + 140, before.y + 90, { steps: 6 }); await page.mouse.up();
+  await expect.poll(async () => Math.round((await card("Show the radius on the minimap").boundingBox()).x - before.x)).toBe(120);
+  // Keyboard: arrows nudge the focused card.
+  await card("Brighter kerb paint").focus(); const nudge = await card("Brighter kerb paint").boundingBox();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => Math.round((await card("Brighter kerb paint").boundingBox()).x - nudge.x)).toBe(12);
+  if (test.info().project.name === "chromium") await page.screenshot({ path: "docs/screenshots/meetings-board.png" });
+  // Outline: the same board as a keyboard list.
+  await board.getByRole("button", { name: "Outline", exact: true }).click();
+  const outline = board.getByRole("listbox", { name: "Board outline" });
+  await expect(outline.getByRole("option")).toHaveText([/^Visibility/, /^Move the braking marker/, /^Brighter kerb paint/, /^Show the radius on the minimap/]);
+  await outline.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  const edit = board.getByLabel("Card text", { exact: true }); await edit.fill("Move the marker out of the shadow"); await edit.press("Enter");
+  await expect(outline.getByRole("option").nth(1)).toHaveText(/^Move the marker out of the shadow/);
+  await page.keyboard.press("Space"); await page.keyboard.press("End"); await page.keyboard.press("Space");
+  await expect(board.getByRole("status").filter({ hasText: "2 cards selected" })).toBeVisible();
+  await board.getByRole("button", { name: "Turn into a brief", exact: true }).click();
+  const brief = view.getByRole("region", { name: /^Document: Brief: / });
+  await expect(brief).toContainText("Made from 2 cards on a board");
+  await expect(brief.getByLabel("Heading 2", { exact: true })).toHaveValue("Visibility");
+  await expect(brief.getByLabel("Paragraph 3", { exact: true })).toHaveValue("Move the marker out of the shadow");
+  await expect(brief.getByLabel("Paragraph 4", { exact: true })).toHaveValue("Show the radius on the minimap");
+  await brief.getByRole("button", { name: "Open board", exact: true }).click();
+  await expect(view.getByRole("region", { name: /^Board: / })).toBeVisible();
+});
 test("keeps a failed workspace microphone join visible and available to retry",async({page})=>{
   const serviceIdentity="e".repeat(64);
   await page.routeWebSocket(/\/rooms$/,socket=>socket.onMessage(raw=>{

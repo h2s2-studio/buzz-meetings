@@ -10,8 +10,8 @@ const byPosition = (a: BoardNode, b: BoardNode) => (a.y ?? 0) - (b.y ?? 0) || (a
 export function addCardOp(content: ArtifactContent, actor: string, text: string, at = Date.now()): NodeOp {
   const taken = cards(content).length, column = taken % 4, row = Math.floor(taken / 4);
   const free = (x: number, y: number) => !content.nodes.some(node => { const value = node as BoardNode; return value.type !== "connector" && Math.abs((value.x ?? 0) - x) < cardSize.w && Math.abs((value.y ?? 0) - y) < cardSize.h; });
-  let x = 32 + column * (cardSize.w + 24), y = 32 + row * (cardSize.h + 24);
-  for (let guard = 0; !free(x, y) && guard < 200; guard++) { x += cardSize.w + 24; if (x > 32 + 3 * (cardSize.w + 24)) { x = 32; y += cardSize.h + 24; } }
+  let x = 40 + column * (cardSize.w + 24), y = 56 + row * (cardSize.h + 24);
+  for (let guard = 0; !free(x, y) && guard < 200; guard++) { x += cardSize.w + 24; if (x > 40 + 3 * (cardSize.w + 24)) { x = 40; y += cardSize.h + 24; } }
   return { type: "insert", node: { id: crypto.randomUUID(), type: "card", text: text.slice(0, 8000), x, y, w: cardSize.w, h: cardSize.h, author: actor, editedAt: at } };
 }
 
@@ -19,7 +19,8 @@ export function addCardOp(content: ArtifactContent, actor: string, text: string,
 export function groupOps(content: ArtifactContent, ids: readonly string[], actor: string, label: string, at = Date.now()): NodeOp[] {
   const chosen = cards(content).filter(card => ids.includes(card.id));
   if (chosen.length < 2) return [];
-  const left = Math.min(...chosen.map(card => card.x ?? 0)) - groupPadding, top = Math.min(...chosen.map(card => card.y ?? 0)) - groupPadding - 16;
+  // Kept on the board (never at negative or clipped coordinates).
+  const left = Math.max(8, Math.min(...chosen.map(card => card.x ?? 0)) - groupPadding), top = Math.max(8, Math.min(...chosen.map(card => card.y ?? 0)) - groupPadding - 16);
   const right = Math.max(...chosen.map(card => (card.x ?? 0) + (card.w ?? cardSize.w))) + groupPadding, bottom = Math.max(...chosen.map(card => (card.y ?? 0) + (card.h ?? cardSize.h))) + groupPadding;
   const id = crypto.randomUUID();
   // The group goes first so cards render above it.

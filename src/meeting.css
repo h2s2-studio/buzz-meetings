@@ -469,3 +469,36 @@ details[class^="meeting-"][open] > summary { margin-block-end: var(--space-2); }
 .meeting-workspace-tabs .buzz-button[aria-pressed="true"] { color: var(--text-standard); background: var(--affordance-selected, var(--affordance-subtle)); font-weight: var(--type-weight-medium, 500); }
 /* A finished agent's result action keeps clear of the tile edge. */
 .meeting-tiles .meeting-agent-roster .meeting-agent-status { padding-block-end: var(--space-3); row-gap: var(--space-1); }
+/* Board (design screen 5), quiet: plain cards on a plain surface, selection is a focus ring. */
+.meeting-board { display: grid; gap: var(--space-3); min-height: 0; }
+.meeting-board-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.meeting-board-views { display: flex; gap: var(--space-4); margin-inline-end: auto; }
+.meeting-board-surface { position: relative; overflow: auto; min-height: 18rem; max-height: 60vh; border-radius: var(--radius-container); background: var(--surface-inset); touch-action: none; }
+.meeting-board-plane { position: relative; }
+.meeting-board-links { position: absolute; inset: 0; pointer-events: none; }
+.meeting-board-links line { stroke: var(--text-metadata); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.meeting-board-card, .meeting-board-group { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border-radius: var(--radius-control); cursor: grab; user-select: none; }
+.meeting-board-card { background: var(--surface-base); border: 1px solid var(--border-standard); box-shadow: var(--shadow-xs); }
+.meeting-board-group { border: 1px dashed var(--border-standard); background: transparent; color: var(--text-subtle); font-size: var(--text-caption); }
+.meeting-board-card[data-selected] { border-color: var(--text-metadata); box-shadow: var(--shadow-sm); }
+.meeting-board-group[data-selected] { border-color: var(--text-metadata); }
+.meeting-board-card:focus-visible, .meeting-board-group:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.meeting-board-card[data-dragging] { cursor: grabbing; box-shadow: var(--shadow-panel); z-index: 1; }
+.meeting-board-text { overflow: hidden; overflow-wrap: anywhere; }
+.meeting-board-author { margin-block-start: auto; color: var(--text-metadata); }
+.meeting-board-input { width: 100%; height: 100%; min-height: 3rem; resize: none; border: 0; background: transparent; color: inherit; font: inherit; }
+.meeting-board-input:focus { outline: none; }
+.meeting-board-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); color: var(--text-subtle); }
+.meeting-board-empty { position: absolute; inset-block-start: 40%; inset-inline: 0; text-align: center; margin: 0; }
+.meeting-board-outline { list-style: none; margin: 0; padding: var(--space-2); display: grid; gap: 2px; border-radius: var(--radius-container); background: var(--surface-inset); }
+.meeting-board-outline:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.meeting-board-outline [role="option"] { padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); cursor: pointer; }
+.meeting-board-outline [role="option"][data-depth="1"] { padding-inline-start: calc(var(--space-3) + var(--space-6)); }
+.meeting-board-outline [role="option"][aria-selected="true"] { background: var(--affordance-subtle); }
+.meeting-board-outline:focus-visible [role="option"][data-focused] { box-shadow: inset 0 0 0 2px var(--border-focus); }
+.meeting-board-selection { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--surface-inset); }
+.meeting-document-source { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+@media (prefers-reduced-motion: reduce) { .meeting-board-card, .meeting-board-group { transition: none; } }
+
+.meeting-document-editor > * { flex-shrink: 0; }
+.meeting-board-card:focus:not(:focus-visible), .meeting-board-group:focus:not(:focus-visible) { outline: none; }

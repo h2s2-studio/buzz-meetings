@@ -2,6 +2,7 @@ import type * as ReactRuntime from "react";
 import { createContent, type ArtifactContent, type Conflict, type DocumentNode } from "./artifacts";
 import type { ArtifactStore, Revision } from "./artifact-store";
 import { documentSession, type DocumentSession } from "./document-editor";
+import { boardUI } from "./board-ui";
 
 /** What to open in the editor: the current head, or one revision read-only ("As presented"). */
 export type OpenTarget = { channelId: string; artifactId: string; revisionId?: string };
@@ -18,6 +19,7 @@ type Options = {
 // sits beside the stage. Board editing comes later; boards list here already.
 export function documentsUI(React: typeof ReactRuntime, options: Options) {
   const { useEffect, useMemo, useState, useSyncExternalStore, useId } = React;
+  const { Board } = boardUI(React);
   const ago = (time: number) => { const seconds = Math.max(0, Math.round((Date.now() - time) / 1000)); return seconds < 10 ? "just now" : seconds < 60 ? `${seconds} s ago` : seconds < 3600 ? `${Math.round(seconds / 60)} min ago` : new Date(time).toLocaleString(); };
   // Open sessions outlive their editor until unsaved typing is flushed. A session whose
   // flush failed stays here, listed as unsaved, so reopening it shows the text and Try again.
@@ -48,19 +50,19 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
     const items = useSyncExternalStore(options.store.subscribe, () => options.store.list(channelId));
     const unsaved = useSyncExternalStore(subscribeRegistry, () => unsavedList);
     const [busy, setBusy] = useState(false), [error, setError] = useState("");
-    async function create() {
+    async function create(kind: "document" | "board" = "document") {
       const actor = options.actor(); if (!actor || busy) return;
       setBusy(true); setError("");
       try {
-        let content: ArtifactContent = createContent({ kind: "document", title: "Untitled document", createdBy: actor, occurrenceId: options.occurrence(channelId) });
-        content = { ...content, nodes: [{ id: crypto.randomUUID(), type: "paragraph", text: "", author: actor, editedAt: Date.now() }] };
+        let content: ArtifactContent = createContent({ kind, title: kind === "board" ? "Untitled board" : "Untitled document", createdBy: actor, occurrenceId: options.occurrence(channelId) });
+        if (kind === "document") content = { ...content, nodes: [{ id: crypto.randomUUID(), type: "paragraph", text: "", author: actor, editedAt: Date.now() }] };
         const revision = await options.store.create(channelId, content);
         open({ channelId, artifactId: revision.artifactId });
       } catch (problem) { setError(problem instanceof Error ? problem.message : "Couldn’t create a document."); }
       finally { setBusy(false); }
     }
     return <section className="meeting-documents text-body-sm" aria-label="Documents and boards">
-      <header className="meeting-documents-header"><h3 className="text-body-sm">Documents & boards</h3><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="prominent" disabled={busy} onClick={() => { void create(); }}>New document</button></header>
+      <header className="meeting-documents-header"><h3 className="text-body-sm">Documents & boards</h3><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="prominent" disabled={busy} onClick={() => { void create(); }}>New document</button><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="subtle" disabled={busy} onClick={() => { void create("board"); }}>New board</button></header>
       <Preview />
       {items.filter(item => unsaved.includes(`${channelId}:${item.id}`)).map(item => <p key={item.id} role="alert" className="meeting-document-notice"><span>Your last change to “{item.title}” isn’t saved yet.</span><button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => open({ channelId, artifactId: item.id })}>Open to try again</button></p>)}
       {!items.length && <p className="text-subtle">Ask an agent to draft something in the call, or start a document here. Everyone with access to this workspace can open and edit it.</p>}
@@ -92,7 +94,7 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
     </div>;
   }
 
-  function Editor({ target, close, openCurrent }: { target: OpenTarget; close(): void; openCurrent?(): void }) {
+  function Editor({ target, close, openCurrent, open }: { target: OpenTarget; close(): void; openCurrent?(): void; open?(target: OpenTarget): void }) {
     const session = useMemo(() => acquire(target.channelId, target.artifactId), [target.channelId, target.artifactId]);
     // Closing, switching documents or leaving the tab flushes what was typed.
     useEffect(() => () => release(target.channelId, target.artifactId), [session]);
@@ -106,7 +108,7 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
     if (readOnly ? presented === undefined : live.phase === "loading") return <section className="meeting-document-editor" aria-label="Document"><p role="status">Opening…</p></section>;
     if (!content || !revision) return <section className="meeting-document-editor" aria-label="Document"><p role="alert">This document is unavailable.</p><button type="button" className="buzz-button" data-buzz-ui="" onClick={close}>Close</button></section>;
     const nodes = content.nodes.filter((node): node is DocumentNode => content.kind === "document");
-    return <section className="meeting-document-editor text-body-sm" aria-label={`Document: ${content.title}`} data-buzz-ui="">
+    return <section className="meeting-document-editor text-body-sm" aria-label={`${content.kind === "board" ? "Board" : "Document"}: ${content.title}`} data-buzz-ui="">
       <header className="meeting-document-header">
         {readOnly ? <h3 className="text-body-sm">{content.title}</h3> : <input className="meeting-document-title" aria-label="Document title" value={title} maxLength={200} onChange={event => setTitle(event.target.value)} onBlur={() => { if (title.trim() && title.trim() !== content.title) live.revision && session.edit([{ type: "rename", title }], true); }} />}
         <span className="meeting-document-authors" aria-label={`Written by ${authors.map(options.name).join(", ")}`}>{authors.map(author => <span key={author} className="meeting-author-chip" title={options.name(author)}>{options.name(author).slice(0, 1).toLocaleUpperCase()}</span>)}</span>
@@ -114,7 +116,9 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
       </header>
       <Preview />
       {readOnly && <p className="meeting-document-notice" role="status"><span>As presented · revision {revision.number}</span>{openCurrent && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={openCurrent}>Open current</button>}</p>}
-      {content.kind !== "document" ? <p className="text-subtle">Whiteboards open here in a later update.</p> : <div className="meeting-document-body">
+      {content.kind === "document" && content.source && <p className="meeting-document-source text-caption text-subtle">Made from {content.source.nodeIds.length} {content.source.nodeIds.length === 1 ? "card" : "cards"} on a board{open && <button type="button" className="buzz-button" data-buzz-ui="" data-size="sm" data-variant="ghost" onClick={() => open({ channelId: target.channelId, artifactId: content.source!.artifactId })}>Open board</button>}</p>}
+      {content.kind === "board" ? <Board session={session} content={content} revision={revision} readOnly={readOnly} actor={options.actor} name={options.name} occurrence={content.occurrenceId}
+        brief={async brief => { const made = await options.store.create(target.channelId, brief); open?.({ channelId: target.channelId, artifactId: made.artifactId }); }} /> : <div className="meeting-document-body">
         {nodes.map((node, index) => <Block key={node.id} node={node} index={index} session={session} readOnly={readOnly}
           conflict={readOnly ? undefined : live.conflicts.find(item => item.nodeId === node.id && item.field === "text")}
           keptBy={readOnly || !live.kept.some(item => item.nodeId === node.id) ? undefined : options.name(node.author)} />)}
@@ -131,7 +135,7 @@ export function documentsUI(React: typeof ReactRuntime, options: Options) {
   /** The tab: the list, or one open item. */
   function DocumentsTab({ channelId, target, setTarget }: { channelId: string; target?: OpenTarget; setTarget(target?: OpenTarget): void }) {
     return target && target.channelId === channelId
-      ? <Editor key={`${target.artifactId}:${target.revisionId ?? "current"}`} target={target} close={() => setTarget()} openCurrent={target.revisionId ? () => setTarget({ channelId, artifactId: target.artifactId }) : undefined} />
+      ? <Editor key={`${target.artifactId}:${target.revisionId ?? "current"}`} target={target} close={() => setTarget()} open={setTarget} openCurrent={target.revisionId ? () => setTarget({ channelId, artifactId: target.artifactId }) : undefined} />
       : <DocumentsList channelId={channelId} open={setTarget} />;
   }
   return { DocumentsTab, Editor, DocumentsList };
